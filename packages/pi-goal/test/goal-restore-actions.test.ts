@@ -124,30 +124,25 @@ test.each(["print", "json"])("ask does not open a dialog in %s mode", async (mod
   await shutdown(restored);
 });
 
-test.each([false, true])(
-  "restore pause aborts work and blocks stale tools with pending continuation=%s",
-  async (pending) => {
-    vi.useFakeTimers();
-    const choice = deferredChoice();
-    const abort = vi.fn();
-    const restored = restore("ask", {}, { select: () => choice.promise, abort });
-    restored.mock.events.get("before_agent_start")?.[0]?.({ prompt: "continue working" }, restored.ctx);
-    if (pending) restored.mock.events.get("agent_end")?.[0]?.({ messages: [] }, restored.ctx);
-    choice.resolve("Keep paused");
-    await flushChoice();
-    assert.equal(requireLastGoal(restored.mock).status, "paused");
-    assert.ok(abort.mock.calls.length > 0);
-    const result = restored.mock.events.get("tool_call")?.[0]?.(
-      { toolName: "bash", input: { command: "true" } },
-      restored.ctx,
-    );
-    assert.ok(result && typeof result === "object" && "block" in result && result.block === true);
-    restored.mock.events.get("agent_settled")?.[0]?.({}, restored.ctx);
-    await vi.runAllTimersAsync();
-    assert.equal(restored.mock.sentUserMessages.length, 0);
-    await shutdown(restored);
-  },
-);
+test.each([false, true])("restore choice ignores newer work with pending continuation=%s", async (pending) => {
+  vi.useFakeTimers();
+  const choice = deferredChoice();
+  const abort = vi.fn();
+  const restored = restore("ask", {}, { select: () => choice.promise, abort });
+  restored.mock.events.get("before_agent_start")?.[0]?.({ prompt: "continue working" }, restored.ctx);
+  if (pending) restored.mock.events.get("agent_end")?.[0]?.({ messages: [] }, restored.ctx);
+  choice.resolve("Keep paused");
+  await flushChoice();
+  assert.equal(requireLastGoal(restored.mock).status, "active");
+  assert.equal(abort.mock.calls.length, 0);
+  const result = restored.mock.events.get("tool_call")?.[0]?.(
+    { toolName: "bash", input: { command: "true" } },
+    restored.ctx,
+  );
+  assert.equal(result, undefined);
+  assert.equal(restored.mock.sentUserMessages.length, 0);
+  await shutdown(restored);
+});
 
 test("restore pause cancels a restored wait deadline", async () => {
   vi.useFakeTimers();

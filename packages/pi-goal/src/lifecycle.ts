@@ -53,10 +53,16 @@ export function registerGoalLifecycle(
   // starts true so handlers keep working on runners where session_start was
   // never emitted (for example late extension loading).
   let sessionActive = true;
-  let cancelledStartup = false;
+  let cancelledRuns = new WeakSet<AbortSignal>();
+  let restoreChoiceController: AbortController | undefined;
+  let headlessRestore: { goalId: string; generation: number } | undefined;
+  const isCancelledRun = (ctx: StatusContext) => ctx.signal !== undefined && cancelledRuns.has(ctx.signal);
   pi.on("session_start", async (_event, ctx) => {
     sessionActive = true;
-    cancelledStartup = false;
+    cancelledRuns = new WeakSet<AbortSignal>();
+    restoreChoiceController?.abort();
+    restoreChoiceController = undefined;
+    headlessRestore = undefined;
     runtime.bindWorkflowSession(ctx.sessionManager);
     runtime.replaceMenuSession();
     runtime.clearCompletionStatusTimer();
@@ -128,12 +134,14 @@ export function registerGoalLifecycle(
         return;
       }
       runtime.updateStatus(ctx, runtime.activeGoal);
-      runtime.restoreGoalWaitTimer(ctx);
       const resumeMode = runtime.settings.resume.autoResumeOnRestore;
-      if (resumeMode === "auto") {
-        const restored = resumeRestoredGoal(ctx, runtime.activeGoal.id);
-        // Short-lived hosts dispose immediately after session_start without new input.
-        if (ctx.mode === "print" || ctx.mode === "json") await restored;
+      const headlessAuto = resumeMode === "auto" && (ctx.mode === "print" || ctx.mode === "json");
+      // Do not dispatch even an overdue wait before later session_start handlers initialize.
+      if (!headlessAuto) runtime.restoreGoalWaitTimer(ctx);
+      if (headlessAuto) {
+        headlessRestore = { goalId: runtime.activeGoal.id, generation: runtime.menuGeneration };
+      } else if (resumeMode === "auto") {
+        void resumeRestoredGoal(ctx, runtime.activeGoal.id);
       } else if (resumeMode === "ask" && ctx.hasUI && ctx.mode !== "print" && ctx.mode !== "json") {
         void promptRestoreChoice(ctx, runtime.activeGoal);
       }
@@ -156,6 +164,27 @@ export function registerGoalLifecycle(
     }
   });
 
+  pi.on("resources_discover", async (_event, ctx) => {
+    const pending = headlessRestore;
+    headlessRestore = undefined;
+    if (
+      !sessionActive ||
+      !pending ||
+      pending.generation !== runtime.menuGeneration ||
+      runtime.activeGoal?.id !== pending.goalId ||
+      !runtime.ownsWorkflow(runtime.activeGoal) ||
+      ctx.isIdle() !== true ||
+      ctx.hasPendingMessages() ||
+      runtime.agentRunGoalId !== undefined ||
+      runtime.hasPendingGoalPromptForGoal(pending.goalId) ||
+      runtime.hasContinuationWorkForGoal(pending.goalId)
+    )
+      return;
+    // Pi awaits this public post-session_start hook before a short-lived host disposes.
+    runtime.restoreGoalWaitTimer(ctx);
+    await resumeRestoredGoal(ctx, pending.goalId);
+  });
+
   function resumeRestoredGoal(ctx: StatusContext, goalId: string) {
     if (runtime.activeGoal?.id !== goalId) return Promise.resolve();
     return runtime.restoreContinuation.start(ctx, runtime.activeGoal);
@@ -169,7 +198,10 @@ export function registerGoalLifecycle(
     if (!ctx.ui.select) return;
     const goalId = goal.id;
     const generation = runtime.menuGeneration;
-    const signal = runtime.menuController.signal;
+    restoreChoiceController?.abort();
+    const controller = new AbortController();
+    restoreChoiceController = controller;
+    const signal = AbortSignal.any([runtime.menuController.signal, controller.signal]);
     const isSessionCurrent = () => sessionActive && generation === runtime.menuGeneration && !signal.aborted;
     let choice: string | undefined;
     try {
@@ -180,13 +212,20 @@ export function registerGoalLifecycle(
       );
     } catch {
       return;
+    } finally {
+      if (restoreChoiceController === controller) restoreChoiceController = undefined;
     }
     // Check the session before touching ctx; the same Goal ID can survive replacement.
     if (
       !isSessionCurrent() ||
       runtime.activeGoal?.id !== goalId ||
       runtime.activeGoal.status !== "active" ||
-      !runtime.ownsWorkflow(runtime.activeGoal)
+      !runtime.ownsWorkflow(runtime.activeGoal) ||
+      ctx.isIdle?.() !== true ||
+      ctx.hasPendingMessages?.() ||
+      runtime.agentRunGoalId !== undefined ||
+      runtime.hasPendingGoalPromptForGoal(goalId) ||
+      runtime.hasContinuationWorkForGoal(goalId)
     ) {
       return;
     }
@@ -216,7 +255,9 @@ export function registerGoalLifecycle(
 
   pi.on("session_shutdown", (_event, ctx) => {
     sessionActive = false;
-    cancelledStartup = false;
+    restoreChoiceController?.abort();
+    restoreChoiceController = undefined;
+    headlessRestore = undefined;
     const shutdownSession = ctx.sessionManager;
     runController.unbindSession();
     runtime.closeMenuSession();
@@ -302,6 +343,9 @@ export function registerGoalLifecycle(
 
   pi.on("input", (event, ctx) => {
     if (!sessionActive) return;
+    restoreChoiceController?.abort();
+    restoreChoiceController = undefined;
+    headlessRestore = undefined;
     if (event.source === "extension") {
       if (
         runtime.consumeCancelledGoalPrompt(event.text) ||
@@ -368,6 +412,12 @@ export function registerGoalLifecycle(
       : typeof message.content === "string"
         ? message.content
         : "";
+    if (runtime.isCancelledOwnedPrompt(prompt)) {
+      if (ctx.signal) cancelledRuns.add(ctx.signal);
+      runtime.beginAgentRun(null, undefined);
+      abortCurrentTurn(ctx);
+      return;
+    }
     const ownedPrompt = runtime.consumeOwnedGoalPrompt(prompt);
     const ownedPromptBoundary = runtime.hasOwnedPromptBoundary(prompt);
     const queuedNonGoalInput = runtime.consumeQueuedNonGoalInput(prompt, !ownedPromptBoundary);
@@ -393,7 +443,7 @@ export function registerGoalLifecycle(
 
   pi.on("context", (event, ctx) => {
     if (!sessionActive) return;
-    if (cancelledStartup) abortCurrentTurn(ctx);
+    if (isCancelledRun(ctx)) abortCurrentTurn(ctx);
     const keptMessages = event.messages.filter((message) => runtime.keepBudgetWrapUpMessage(message));
     const hasGoalContractHistory =
       keptMessages.some(isGoalContextContract) || runtime.hasGoalContextContractHistory(ctx);
@@ -415,7 +465,7 @@ export function registerGoalLifecycle(
 
   pi.on("tool_call", (event, ctx) => {
     if (!sessionActive) return;
-    if (cancelledStartup) {
+    if (isCancelledRun(ctx)) {
       abortCurrentTurn(ctx);
       return { block: true, reason: "Goal startup was cancelled before this prompt reached the model." };
     }
@@ -474,11 +524,9 @@ export function registerGoalLifecycle(
   pi.on("before_agent_start", (event, ctx) => {
     if (!sessionActive) return;
     // Input can be accepted before asynchronous preflight. Check again after it finishes.
-    cancelledStartup = runtime.isCancelledOwnedPrompt(event.prompt);
-    if (cancelledStartup) {
-      abortCurrentTurn(ctx);
-      return;
-    }
+    // Bind cancellation at the actual user-message boundary; unrelated preflights
+    // can reach this hook concurrently without owning the same run signal.
+    if (runtime.isCancelledOwnedPrompt(event.prompt)) return;
     runtime.clearAgentRun();
     // Pi-owned retries emit agent_start directly. Reaching a normal prompt
     // boundary means cleanup no longer owns the next run, so the hard-cap guard
@@ -570,7 +618,7 @@ export function registerGoalLifecycle(
   });
 
   pi.on("agent_end", (event, ctx) => {
-    if (!sessionActive || cancelledStartup) return;
+    if (!sessionActive) return;
     const run = runtime.finishAgentRun();
     if (run.goalId === null) return;
     if (!runtime.canRecordGoalUsage() && !runtime.hasActiveBudgetWrapUp()) return;
@@ -658,7 +706,6 @@ export function registerGoalLifecycle(
 
   pi.on("agent_settled", (_event, ctx) => {
     if (!sessionActive) return;
-    cancelledStartup = false;
     if (runtime.activeGoal?.status === "active" && !runtime.ownsWorkflow(runtime.activeGoal)) {
       runtime.cancelContinuationWork();
       runtime.clearGoalRecovery();

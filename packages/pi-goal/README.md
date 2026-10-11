@@ -152,15 +152,17 @@ Goal state is stored in the current Pi session.
 An active restored goal at or above its finite automatic-work limit pauses before another provider request and reports that progress is saved.
 By default, TUI and RPC ask whether to resume, pause, or clear a restored active Goal.
 Cancellation or the 30-second timeout leaves it active without starting work.
-Use `/goal resume` to continue an idle restored Goal directly.
+Use `/goal resume` or **Resume goal** in the `/goal` manager to continue an idle restored Goal directly.
+The manager and command hints use the same idle and pending-work checks as the command.
 It rejects active Goals with running work or queued Goal or session prompts.
 A failed active resume keeps workflow ownership; missing required tools pause the Goal before releasing it.
-Auto restore waits for Goal settlement in print and JSON hosts, including runs without new input.
+Auto restore in print and JSON hosts starts after all `session_start` handlers finish and waits for Goal settlement, including runs without new input.
 An unacknowledged restore pauses after a 30-second idle startup wait; fix Pi's reported error and use `/goal resume` to retry.
 An unacknowledged idle-active manual resume restores the original Goal ID and state after that deadline and permits a retry.
-Late cancelled startup prompts are aborted at the model boundary, and already-due Auto wait deadlines run before headless shutdown.
+Late cancelled startup prompts are aborted by their exact run signal at the model boundary, and already-due Auto wait deadlines run before headless shutdown.
+Accepted input cancels a pending Ask dialog; stale choices cannot pause, clear, or schedule work for a newer run.
 See [restore settings](./docs/settings.md#resume-on-restore) for automatic and non-interactive behavior.
-A restored waiting Goal remains quiet unless explicitly resumed, excludes offline and waiting wall time from active elapsed time, and restores only its absolute optional deadline timer.
+A restored waiting Goal remains quiet until an explicit resume or its optional absolute deadline, excludes offline and waiting wall time from active elapsed time, and restores only that deadline timer.
 An active restored goal pauses when workflow admission is busy or either required terminal tool is missing, without changing the active tool set.
 Active elapsed time is checkpointed before shutdown and restarted after reload only when the Goal is not waiting, so offline and stopped wall-clock time is excluded.
 Automatic-response counts, repeat fingerprints, and safety-pause causes persist across reload and compaction.

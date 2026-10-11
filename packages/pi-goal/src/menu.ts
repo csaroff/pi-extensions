@@ -32,6 +32,7 @@ interface GoalMenuRuntimeView {
   recordGoalUsage?: GoalRuntime["recordGoalUsage"];
   persistGoal?: GoalRuntime["persistGoal"];
   updateStatus?: GoalRuntime["updateStatus"];
+  canResumeIdleActiveGoal?: GoalRuntime["canResumeIdleActiveGoal"];
 }
 
 export interface GoalMenuState {
@@ -63,7 +64,7 @@ type GoalMenuAction =
   | "clear"
   | "back";
 
-export function buildGoalMenuState(runtime: GoalMenuRuntimeView): GoalMenuState {
+export function buildGoalMenuState(runtime: GoalMenuRuntimeView, idleActive = false): GoalMenuState {
   const goal = runtime.activeGoal;
   const pausedByAutomaticLimit = goal?.status === "paused" && goal.safetyPauseCause === "continuation_limit";
   const waitingReason = goal?.waiting ? safeGoalMenuText(goal.waiting.reason) : undefined;
@@ -106,7 +107,7 @@ export function buildGoalMenuState(runtime: GoalMenuRuntimeView): GoalMenuState 
   } else if (goal.waiting) {
     actions.push(GOAL_MENU_ACTIONS.resume);
   } else if (goal.status === "active") {
-    actions.push(GOAL_MENU_ACTIONS.pause);
+    actions.push(idleActive ? GOAL_MENU_ACTIONS.resume : GOAL_MENU_ACTIONS.pause);
   } else if (goal.status === "budget_limited") {
     actions.push(GOAL_MENU_ACTIONS.increaseBudget);
   } else if (pausedByAutomaticLimit) {
@@ -151,7 +152,7 @@ export async function showGoalManager(
     screens: {
       main: () => {
         refreshGoalMenuState(runtime, ctx);
-        const state = buildGoalMenuState(runtime);
+        const state = buildGoalMenuState(runtime, runtime.canResumeIdleActiveGoal?.(ctx));
         displayedGoal = runtime.activeGoal;
         return {
           kind: "actions",
@@ -273,7 +274,11 @@ export async function showGoalManager(
         kind: "detail",
         title: "Goal status",
         lines: runtime.activeGoal
-          ? goalSummary(runtime.activeGoal, runtime.settings.continuationLimits.automaticTurns).split("\n")
+          ? goalSummary(
+              runtime.activeGoal,
+              runtime.settings.continuationLimits.automaticTurns,
+              runtime.canResumeIdleActiveGoal?.(ctx),
+            ).split("\n")
           : ["No goal is currently set."],
         hint: "back",
       }),

@@ -16,7 +16,6 @@ import {
   formatError,
   type GoalRuntime,
   goalSummary,
-  hasPendingMessages,
   isResumableGoalStatus,
   nextGoalInstance,
   queueGoalSafetyReset,
@@ -211,13 +210,7 @@ export class GoalCommandController {
       return;
     }
     // An idle active Goal can be restored without a running agent or continuation.
-    const idleActiveGoal =
-      this.runtime.activeGoal.status === "active" &&
-      this.runtime.agentRunGoalId === undefined &&
-      !this.runtime.hasContinuationWorkForGoal(this.runtime.activeGoal.id) &&
-      !this.runtime.hasPendingGoalPromptForGoal(this.runtime.activeGoal.id) &&
-      ctx.isIdle?.() === true &&
-      !hasPendingMessages(ctx);
+    const idleActiveGoal = this.runtime.canResumeIdleActiveGoal(ctx);
     if (!isResumableGoalStatus(this.runtime.activeGoal.status) && !idleActiveGoal) {
       notifyTerminal(
         ctx.ui,
@@ -491,7 +484,11 @@ export class GoalCommandController {
     this.runtime.updateStatus(ctx, this.runtime.activeGoal);
     this.reportGoalStatus(
       ctx,
-      goalSummary(this.runtime.activeGoal, this.runtime.settings.continuationLimits.automaticTurns),
+      goalSummary(
+        this.runtime.activeGoal,
+        this.runtime.settings.continuationLimits.automaticTurns,
+        this.runtime.canResumeIdleActiveGoal(ctx),
+      ),
     );
   }
 

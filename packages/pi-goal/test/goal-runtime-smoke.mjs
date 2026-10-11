@@ -120,7 +120,10 @@ async function createHarness(
                 return { content: [{ type: "text", text: "probe complete" }] };
               },
             });
-            pi.on("session_start", () => lifecycleEvents.push("session_start"));
+            pi.on("session_start", async () => {
+              await Promise.resolve();
+              lifecycleEvents.push("session_start");
+            });
             pi.on("agent_start", () => lifecycleEvents.push("agent_start"));
             pi.on("message_end", (event) => {
               if (event.message.role === "assistant") lifecycleEvents.push("assistant_message_end");
@@ -152,7 +155,7 @@ async function createHarness(
     });
     assert.deepEqual(result.extensionsResult.errors, []);
     createdSession = result.session;
-    await bindSession(result.session, model, modelRuntime);
+    await bindSession(result.session, model, modelRuntime, lifecycleEvents);
     return {
       agentDir,
       extensions: result.extensionsResult.extensions.map((extension) => ({
@@ -682,6 +685,7 @@ function restoredGoal(sessionManager, waiting) {
 }
 
 async function noInputRestoreScenario(mode, waiting) {
+  const initializedAtRun = [];
   // Exercise the actual short-lived host; it has no public root export.
   const printModule = new URL("./modes/print-mode.js", import.meta.resolve("@earendil-works/pi-coding-agent"));
   const { runPrintMode } = await import(printModule.href);
@@ -692,7 +696,10 @@ async function noInputRestoreScenario(mode, waiting) {
     { resume: { autoResumeOnRestore: "auto" } },
     {},
     undefined,
-    async (session) => {
+    async (session, _model, _modelRuntime, lifecycleEvents) => {
+      const unsubscribe = session.subscribe((event) => {
+        if (event.type === "agent_start") initializedAtRun.push(lifecycleEvents.includes("session_start"));
+      });
       const host = {
         session,
         setRebindSession() {},
@@ -701,12 +708,17 @@ async function noInputRestoreScenario(mode, waiting) {
           session.dispose();
         },
       };
-      assert.equal(await runPrintMode(host, { mode, messages: [] }), 0);
+      try {
+        assert.equal(await runPrintMode(host, { mode, messages: [] }), 0);
+      } finally {
+        unsubscribe();
+      }
     },
   );
   try {
     assert.equal(harness.faux.state.callCount, 1);
     assert.equal(persistedGoalStatus(harness.session), null);
+    assert.deepEqual(initializedAtRun, [true], "later asynchronous startup handlers must initialize before Goal work");
     assert.ok(harness.lifecycleEvents.includes("agent_settled"));
   } finally {
     await harness.cleanup();

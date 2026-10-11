@@ -114,6 +114,7 @@ export interface StatusContext {
   isIdle?: () => boolean;
   hasPendingMessages?: () => boolean;
   abort?: () => void;
+  signal?: AbortSignal;
   sessionManager?: unknown;
 }
 
@@ -447,6 +448,19 @@ export class GoalRuntime {
 
   hasContinuationWorkForGoal(goalId: string) {
     return this.continuationIntent?.goalId === goalId || this.continuationDelivery?.goalId === goalId;
+  }
+
+  canResumeIdleActiveGoal(ctx: StatusContext) {
+    const goal = this.activeGoal;
+    return (
+      goal?.status === "active" &&
+      !goal.waiting &&
+      this.agentRunGoalId === undefined &&
+      !this.hasContinuationWorkForGoal(goal.id) &&
+      !this.hasPendingGoalPromptForGoal(goal.id) &&
+      ctx.isIdle?.() === true &&
+      !hasPendingMessages(ctx)
+    );
   }
 
   hasPendingGoalPromptForGoal(goalId: string) {
@@ -1468,6 +1482,7 @@ export function formatBudget(goal: ActiveGoal) {
 export function goalSummary(
   goal: ActiveGoal,
   automaticTurnLimit: number | null = DEFAULT_GOAL_SETTINGS.continuationLimits.automaticTurns,
+  idleActive = false,
 ) {
   const summary = [
     `Goal: ${goal.text}`,
@@ -1494,7 +1509,7 @@ export function goalSummary(
         : "Safety pause: no progress. Progress is saved; open /goal to review and continue.",
     );
   }
-  summary.push(`Commands: ${goalCommandHint(goal)}`);
+  summary.push(`Commands: ${goalCommandHint(goal, idleActive)}`);
   return summary.join("\n");
 }
 
@@ -1589,8 +1604,8 @@ function notifyWhenSessionAlive(ctx: StatusContext, message: string, level?: "in
   }
 }
 
-function goalCommandHint(goal: ActiveGoal) {
-  if (goal.waiting) {
+function goalCommandHint(goal: ActiveGoal, idleActive: boolean) {
+  if (goal.waiting || idleActive) {
     return "/goal resume, /goal edit <objective>, /goal pause, /goal clear";
   }
   if (goal.status === "active") {

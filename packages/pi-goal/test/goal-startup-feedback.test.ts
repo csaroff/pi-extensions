@@ -51,7 +51,7 @@ test("unacknowledged idle active resume restores its original Goal and permits r
 test("a timed-out restore aborts a late accepted prompt at its model context boundary", async () => {
   vi.useFakeTimers();
   const abort = vi.fn();
-  const active = restore("auto", { mode: "rpc", abort });
+  const active = restore("auto", { mode: "rpc", abort, signal: new AbortController().signal });
   await vi.advanceTimersByTimeAsync(0);
   const prompt = active.mock.sentUserMessages[0]?.text;
   assert.ok(prompt);
@@ -60,6 +60,7 @@ test("a timed-out restore aborts a late accepted prompt at its model context bou
   assert.equal(requireLastGoal(active.mock).status, "paused");
   abort.mockClear();
   active.mock.events.get("before_agent_start")?.[0]?.({ prompt }, active.ctx);
+  active.mock.events.get("message_start")?.[0]?.({ message: { role: "user", content: prompt } }, active.ctx);
   active.mock.events.get("context")?.[0]?.({ messages: [] }, active.ctx);
   assert.ok(abort.mock.calls.length > 0);
   await active.mock.events.get("session_shutdown")?.[0]?.({}, active.ctx);
@@ -80,13 +81,14 @@ test("manual startup acknowledgement cancels recovery without resetting the orig
 test("late rejected manual startup leaves the original active Goal intact and does not abort unrelated input", async () => {
   vi.useFakeTimers();
   const abort = vi.fn();
-  const active = restore("off", { abort });
+  const active = restore("off", { abort, signal: new AbortController().signal });
   await active.mock.commands.get("goal")?.handler("resume", active.ctx);
   const prompt = active.mock.sentUserMessages[0]?.text;
   assert.ok(prompt);
   active.mock.events.get("input")?.[0]?.({ text: prompt, source: "extension" }, active.ctx);
   await vi.advanceTimersByTimeAsync(30_000);
   active.mock.events.get("before_agent_start")?.[0]?.({ prompt }, active.ctx);
+  active.mock.events.get("message_start")?.[0]?.({ message: { role: "user", content: prompt } }, active.ctx);
   abort.mockClear();
   active.mock.events.get("context")?.[0]?.({ messages: [] }, active.ctx);
   assert.ok(abort.mock.calls.length > 0);
@@ -94,6 +96,7 @@ test("late rejected manual startup leaves the original active Goal intact and do
   assert.equal(requireLastGoal(active.mock).id, "restored-feedback");
   assert.equal(requireLastGoal(active.mock).status, "active");
   active.mock.events.get("agent_settled")?.[0]?.({}, active.ctx);
+  Object.assign(active.ctx, { signal: new AbortController().signal });
   abort.mockClear();
   active.mock.events.get("before_agent_start")?.[0]?.(
     { prompt: `Quoted cancelled work: ${prompt}\nEnd quote` },
@@ -122,8 +125,10 @@ test.each(["print", "json"])("%s dispatches an overdue restored Auto wait during
     { mode, hasUI: false },
     { waiting: { reason: "external work", resumeAt: Date.now() - 1 } },
   );
+  const startup = active.mock.events.get("resources_discover")?.[0]?.({ reason: "startup" }, active.ctx);
   await Promise.resolve();
   assert.equal(active.mock.sentUserMessages.length, 1);
   assert.equal(requireLastGoal(active.mock).waiting, undefined);
   await active.mock.events.get("session_shutdown")?.[0]?.({}, active.ctx);
+  await startup;
 });

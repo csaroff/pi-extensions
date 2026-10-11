@@ -112,7 +112,7 @@ test("newer work supersedes an accepted continuation delivery that lost the star
 
 test("a stale continuation that crossed input cannot stop a replacement goal", async () => {
   let aborts = 0;
-  const replaced = await startGoalForTest({ abort: () => aborts++ });
+  const replaced = await startGoalForTest({ abort: () => aborts++, signal: new AbortController().signal });
   await replaced.mock.events.get("agent_end")?.[0]?.(
     { messages: [{ role: "assistant", stopReason: "stop" }] },
     replaced.ctx,
@@ -130,6 +130,11 @@ test("a stale continuation that crossed input cannot stop a replacement goal", a
     replaced.ctx,
   );
   assert.equal(staleResult, undefined);
+  assert.equal(aborts, 0, "preflight must not abort a different active run");
+  replaced.mock.events.get("message_start")?.[0]?.(
+    { message: { role: "user", content: staleContinuation } },
+    replaced.ctx,
+  );
   assert.equal(aborts, 1);
   replaced.mock.events.get("agent_end")?.[0]?.(
     { messages: [{ role: "assistant", stopReason: "aborted" }] },
