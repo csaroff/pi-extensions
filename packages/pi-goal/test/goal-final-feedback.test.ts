@@ -116,5 +116,5 @@ test("Goal menu can expose idle-active resume", () => {
     },
     true,
   );
-  assert.equal(state.actions[0], GOAL_MENU_ACTIONS.resume);
+  assert.deepEqual(state.actions.slice(0, 2), [GOAL_MENU_ACTIONS.resume, GOAL_MENU_ACTIONS.pause]);
 });

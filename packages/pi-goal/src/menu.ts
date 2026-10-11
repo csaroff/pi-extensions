@@ -107,7 +107,8 @@ export function buildGoalMenuState(runtime: GoalMenuRuntimeView, idleActive = fa
   } else if (goal.waiting) {
     actions.push(GOAL_MENU_ACTIONS.resume);
   } else if (goal.status === "active") {
-    actions.push(idleActive ? GOAL_MENU_ACTIONS.resume : GOAL_MENU_ACTIONS.pause);
+    if (idleActive) actions.push(GOAL_MENU_ACTIONS.resume);
+    actions.push(GOAL_MENU_ACTIONS.pause);
   } else if (goal.status === "budget_limited") {
     actions.push(GOAL_MENU_ACTIONS.increaseBudget);
   } else if (pausedByAutomaticLimit) {
