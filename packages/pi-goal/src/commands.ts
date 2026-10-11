@@ -209,10 +209,15 @@ export class GoalCommandController {
       await this.resumeWaitingGoal(ctx);
       return;
     }
-    if (!isResumableGoalStatus(this.runtime.activeGoal.status)) {
+    // An idle active Goal can be restored without a running agent or continuation.
+    const idleActiveGoal =
+      this.runtime.activeGoal.status === "active" &&
+      this.runtime.agentRunGoalId === undefined &&
+      !this.runtime.hasContinuationWorkForGoal(this.runtime.activeGoal.id);
+    if (!isResumableGoalStatus(this.runtime.activeGoal.status) && !idleActiveGoal) {
       notifyTerminal(
         ctx.ui,
-        `Goal is ${this.runtime.activeGoal.status}; only paused, blocked, usage-limited, or budget-limited goals can be resumed.`,
+        `Goal is ${this.runtime.activeGoal.status}; only stopped or idle active goals can be resumed.`,
         "warning",
       );
       return;

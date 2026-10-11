@@ -176,7 +176,7 @@ test("replacement confirmation sanitizes terminal controls without changing goal
   assert.equal(state.activeGoal?.text, "current\u001b]8;;bad\u0007 objective");
 });
 
-test("standard settings keep all three controls on one level", async () => {
+test("standard settings keep all four controls on one level", async () => {
   const state = runtime();
   let title = "";
   let options: string[] = [];
@@ -191,7 +191,7 @@ test("standard settings keep all three controls on one level", async () => {
   });
   await showGoalSettings(state, context.ctx, { settingsPath: "/tmp/pi-goal.json" });
   assert.match(title, /Pi Goal Settings/);
-  assert.deepEqual(options, ["Automatic-work limit", "No-progress guard", "Managed run RPC"]);
+  assert.deepEqual(options, ["Automatic-work limit", "No-progress guard", "Managed run RPC", "On restore"]);
 });
 
 test("automatic-work settings can open directly from the safety recovery flow", async () => {
@@ -459,6 +459,40 @@ test("automatic-work editing rejects a replacement active goal without saving", 
   assert.equal(saves, 0);
   assert.equal(state.settings.continuationLimits.automaticTurns, 25);
   assert.match(context.notifications.at(-1)?.message ?? "", /active goal changed/i);
+});
+
+test.each([
+  ["ask", "auto"],
+  ["auto", "off"],
+  ["off", "ask"],
+] as const)("On restore changes %s to %s and saves immediately", async (before, after) => {
+  const state = runtime();
+  state.settings.resume.autoResumeOnRestore = before;
+  let saved: GoalSettings | undefined;
+  const selections = ["On restore", undefined];
+  const context = createMockContext({ mode: "tui", hasUI: true, select: async () => selections.shift() });
+  await showGoalSettings(state, context.ctx, {
+    settingsPath: "/tmp/pi-goal.json",
+    save(settings) {
+      saved = structuredClone(settings);
+    },
+  });
+  assert.equal(saved?.resume.autoResumeOnRestore, after);
+  assert.equal(state.settings.resume.autoResumeOnRestore, after);
+});
+
+test("On restore preserves its previous value after a failed save", async () => {
+  const state = runtime();
+  const selections = ["On restore", undefined];
+  const context = createMockContext({ mode: "tui", hasUI: true, select: async () => selections.shift() });
+  await showGoalSettings(state, context.ctx, {
+    settingsPath: "/tmp/pi-goal.json",
+    save() {
+      throw new Error("disk full");
+    },
+  });
+  assert.equal(state.settings.resume.autoResumeOnRestore, "ask");
+  assert.match(context.notifications.at(-1)?.message ?? "", /previous value remains/i);
 });
 
 test("Managed run RPC setting defaults off and saves immediately", async () => {

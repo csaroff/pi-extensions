@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { currentTokenTotal } from "./accounting.js";
-import { notifyTerminal } from "./errors.js";
+import type { GoalCommandController } from "./commands.js";
+import { notifyTerminal, safeGoalMenuText } from "./errors.js";
 import {
   GOAL_CONTRACT_MESSAGE_TYPE,
   isGoalContextContract,
@@ -14,6 +15,7 @@ import {
   abortCurrentTurn,
   blocksStaleGoalToolCalls,
   findFinalAssistantMessage,
+  formatError,
   type GoalRuntime,
   incrementGoal,
   isGoalContextOverflow,
@@ -41,6 +43,7 @@ export function registerGoalLifecycle(
   pi: ExtensionAPI,
   runtime: GoalRuntime,
   runController: GoalRunController,
+  commands: GoalCommandController,
   options: GoalLifecycleOptions = {},
 ) {
   // Pi invalidates this module's ExtensionContext when the session is replaced
@@ -124,6 +127,12 @@ export function registerGoalLifecycle(
       }
       runtime.updateStatus(ctx, runtime.activeGoal);
       runtime.restoreGoalWaitTimer(ctx);
+      const resumeMode = runtime.settings.resume.autoResumeOnRestore;
+      if (resumeMode === "auto") {
+        resumeRestoredGoal(ctx, runtime.activeGoal.id);
+      } else if (resumeMode === "ask" && ctx.hasUI && ctx.mode !== "print") {
+        void promptRestoreChoice(ctx, runtime.activeGoal);
+      }
       return;
     }
 
@@ -142,6 +151,66 @@ export function registerGoalLifecycle(
       ctx.ui.setStatus(STATUS_KEY, undefined);
     }
   });
+
+  function resumeRestoredGoal(ctx: StatusContext, goalId: string) {
+    if (runtime.activeGoal?.id !== goalId) return;
+    if (runtime.requestContinuation(runtime.activeGoal)) {
+      runtime.scheduleContinuationDispatch(ctx, goalId);
+    }
+  }
+
+  const RESTORE_RESUME = "Resume now";
+  const RESTORE_PAUSE = "Keep paused";
+  const RESTORE_CLEAR = "Clear goal";
+
+  async function promptRestoreChoice(ctx: StatusContext, goal: ActiveGoal) {
+    if (!ctx.ui.select) return;
+    const goalId = goal.id;
+    const generation = runtime.menuGeneration;
+    const signal = runtime.menuController.signal;
+    const isSessionCurrent = () => sessionActive && generation === runtime.menuGeneration && !signal.aborted;
+    let choice: string | undefined;
+    try {
+      choice = await ctx.ui.select(
+        `Restore active goal: ${safeGoalMenuText(goal.text, 120)}`,
+        [RESTORE_RESUME, RESTORE_PAUSE, RESTORE_CLEAR],
+        { timeout: 30_000, signal },
+      );
+    } catch {
+      return;
+    }
+    // Check the session before touching ctx; the same Goal ID can survive replacement.
+    if (
+      !isSessionCurrent() ||
+      runtime.activeGoal?.id !== goalId ||
+      runtime.activeGoal.status !== "active" ||
+      !runtime.ownsWorkflow(runtime.activeGoal)
+    ) {
+      return;
+    }
+    try {
+      if (choice === RESTORE_RESUME) {
+        if (runtime.activeGoal.waiting) {
+          // An explicit choice can wake a wait; automatic restoration cannot.
+          await commands.resumeGoal(ctx);
+        } else {
+          resumeRestoredGoal(ctx, goalId);
+        }
+        return;
+      }
+      if (choice === RESTORE_CLEAR) {
+        commands.clearGoal(ctx);
+        return;
+      }
+      if (choice === RESTORE_PAUSE) {
+        // Use the normal stop path to cancel queued work and block stale tools.
+        commands.pauseGoal(ctx);
+      }
+      // Dismissal or timeout leaves the restored Goal active without starting work.
+    } catch (error) {
+      if (isSessionCurrent()) notifyTerminal(ctx.ui, `Goal restore failed: ${formatError(error)}`, "error");
+    }
+  }
 
   pi.on("session_shutdown", (_event, ctx) => {
     sessionActive = false;

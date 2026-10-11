@@ -62,7 +62,8 @@ A missing file uses the defaults without creating it:
     "automaticTurns": 25,
     "noProgressTurns": 3
   },
-  "rpc": { "enabled": false }
+  "rpc": { "enabled": false },
+  "resume": { "autoResumeOnRestore": "ask" }
 }
 ```
 
@@ -70,6 +71,7 @@ The automatic-work limit counts model responses in Goal-owned automatic work, in
 The no-progress guard pauses repeated tool-free output.
 Choose **Unlimited** or **Off** explicitly to disable the corresponding guard; Unlimited requires confirmation and can continue consuming tokens and provider cost.
 Neither these guards nor an optional token budget is a dollar-cost cap.
+**On restore** defaults to **Ask**. Choosing **Auto** can start paid model work when an active Goal is restored.
 
 Menu saves apply immediately, run in order, preserve unknown fields, and publish atomically.
 Manual edits apply at session start or `/reload`.
@@ -125,7 +127,7 @@ Guaranteed coexistence with Plan mode requires `@narumitw/pi-plan-mode` `0.52.0`
 | `/goal [--tokens <budget>] <objective>` | Start automatic work, confirming replacement of an unfinished goal. |
 | `/goal edit [--tokens <budget>] <objective>` | Update the objective or budget without resetting cumulative usage. |
 | `/goal pause` | Pause an active goal and abort its current turn, preserving progress. |
-| `/goal resume` | Resume an eligible stopped goal or wake an active waiting goal. |
+| `/goal resume` | Resume an eligible stopped or idle active goal, or wake an active waiting goal. |
 | `/goal clear` (alias: `stop`) | Immediately clear the goal and pending continuation, not unrelated in-flight work. |
 
 All routes support TUI and RPC; bare `/goal` and `status` reject print and JSON modes, while direct mutation routes remain available.
@@ -148,8 +150,11 @@ See [Managing goals](./docs/managing-goals.md) for safety-epoch resets, failed-d
 Goal state is stored in the current Pi session.
 `/reload` and reopening the same Pi session can restore that session's unfinished goal.
 An active restored goal at or above its finite automatic-work limit pauses before another provider request and reports that progress is saved.
-Use `/goal` to review and continue.
-A restored waiting Goal remains quiet, excludes offline and waiting wall time from active elapsed time, and restores only its absolute optional deadline timer.
+By default, TUI and RPC ask whether to resume, pause, or clear a restored active Goal.
+Cancellation or the 30-second timeout leaves it active without starting work.
+Use `/goal resume` to continue an idle restored Goal directly.
+See [restore settings](./docs/settings.md#resume-on-restore) for automatic and non-interactive behavior.
+A restored waiting Goal remains quiet unless explicitly resumed, excludes offline and waiting wall time from active elapsed time, and restores only its absolute optional deadline timer.
 An active restored goal pauses when workflow admission is busy or either required terminal tool is missing, without changing the active tool set.
 Active elapsed time is checkpointed before shutdown and restarted after reload only when the Goal is not waiting, so offline and stopped wall-clock time is excluded.
 Automatic-response counts, repeat fingerprints, and safety-pause causes persist across reload and compaction.

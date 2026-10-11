@@ -18,12 +18,15 @@ When `~/.pi/agent/pi-goal.json` is absent, pi-goal uses these built-in defaults 
   "continuationLimits": {
     "automaticTurns": 25,
     "noProgressTurns": 3
+  },
+  "resume": {
+    "autoResumeOnRestore": "ask"
   }
 }
 ```
 
 Use `/goal` → **Settings…** in the TUI to create or update the file, or edit it directly.
-The Settings screen shows all three controls on one level.
+The Settings screen shows all four controls on one level.
 The two safety limits open separate choice screens:
 
 - **Automatic-work limit** shows the exact response limit or **Unlimited**.
@@ -33,6 +36,7 @@ The two safety limits open separate choice screens:
   Choose the default threshold, **Off**, or **Set threshold…** and enter a safe whole number greater than zero.
 - **Managed run RPC** controls whether trusted installed extensions may start and cancel managed Goal runs.
   It defaults to **Off** and controls cooperation, not extension permissions.
+- **On restore** selects **Ask**, **Auto**, or **Off** for restored active Goals; see [Resume on restore](#resume-on-restore).
 
 Custom number inputs accept only positive safe integers.
 Choose **Unlimited** or **Off** explicitly instead of entering zero, a negative number, a decimal, or text.
@@ -72,6 +76,29 @@ Reload, replacement, and shutdown clear that in-memory ownership.
   Consecutive empty or identical tool-free outputs increment the repeat count.
   Different non-empty output starts a new run at one, and any attempted tool call resets it.
   Set this field to `null` to disable only this heuristic.
+
+## Resume on restore
+
+`resume.autoResumeOnRestore` accepts `"ask"`, `"auto"`, or `"off"` and defaults to `"ask"`:
+
+- **Ask** opens one TUI or RPC dialog with **Resume now**, **Keep paused**, and **Clear goal**.
+  The dialog has a 30-second timeout. Cancellation, timeout, or a dialog failure leaves the Goal active without starting work.
+  Print and JSON modes do not ask or start restore work.
+- **Auto** requests one continuation after restoring an eligible active Goal, including in non-interactive modes.
+  It can consume provider tokens and cost without a new user command.
+- **Off** restores the Goal without requesting a continuation or showing a dialog.
+
+Stopped Goals never resume automatically. Budget, automatic-work, no-progress, required-tool, and workflow-admission checks still apply before restore work starts.
+Automatic restoration preserves existing safety counters and does not wake an external wait; existing wait deadlines remain in effect in all three modes.
+An explicit **Resume now** choice wakes a waiting Goal through the normal waiting-resume path without resetting its safety epoch.
+**Keep paused** uses the normal pause operation, which aborts the current turn, cancels owned continuation and wait work, and blocks stale tool calls.
+**Clear goal** uses the normal clear operation; it does not abort unrelated in-flight work.
+Shutdown or session replacement cancels the dialog and ignores late responses.
+
+Legacy boolean values are accepted: `true` maps to `"auto"`, and `false` maps to `"off"`.
+The next explicit settings save writes the normalized string and preserves unknown fields.
+
+## Settings persistence
 
 Settings are reread at Pi startup, session replacement, and `/reload`.
 Direct file edits are not watched, while Goal-menu changes apply immediately.

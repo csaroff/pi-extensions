@@ -70,6 +70,31 @@ test("normalizeGoalSettings applies defaults and ignores retired tool visibility
   }
 });
 
+test.each([
+  ["ask", "ask"],
+  ["auto", "auto"],
+  ["off", "off"],
+  [true, "auto"],
+  [false, "off"],
+])("normalizeGoalSettings accepts restore mode %s as %s", (value, expected) => {
+  assert.equal(normalizeGoalSettings({ resume: { autoResumeOnRestore: value } })?.resume.autoResumeOnRestore, expected);
+});
+
+test("normalizeGoalSettings defaults restore mode and rejects invalid values", () => {
+  assert.deepEqual(normalizeGoalSettings({ resume: {} })?.resume, { autoResumeOnRestore: "ask" });
+  for (const resume of [
+    null,
+    [],
+    true,
+    "auto",
+    { autoResumeOnRestore: "Auto" },
+    { autoResumeOnRestore: 1 },
+    { autoResumeOnRestore: null },
+  ]) {
+    assert.equal(normalizeGoalSettings({ resume }), undefined);
+  }
+});
+
 test("saveGoalSettings creates a complete document only on explicit save", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "pi-goal-settings-create-"));
   t.onTestFinished(() => rm(directory, { recursive: true, force: true }));
@@ -100,6 +125,7 @@ test("saveGoalSettings atomically preserves unknown top-level and nested fields"
       experimental: { goals: true, futureQueue: "keep" },
       rpc: { enabled: true, futureRpc: "keep" },
       continuationLimits: { automaticTurns: 25, noProgressTurns: 3, futureLimit: 9 },
+      resume: { autoResumeOnRestore: true, futureResume: "keep" },
     }),
   );
 
@@ -107,6 +133,7 @@ test("saveGoalSettings atomically preserves unknown top-level and nested fields"
     {
       rpc: { enabled: false },
       continuationLimits: { automaticTurns: 40, noProgressTurns: null },
+      resume: { autoResumeOnRestore: "ask" },
     },
     settingsPath,
   );
@@ -117,6 +144,7 @@ test("saveGoalSettings atomically preserves unknown top-level and nested fields"
     experimental: { goals: true, futureQueue: "keep" },
     rpc: { enabled: false, futureRpc: "keep" },
     continuationLimits: { automaticTurns: 40, noProgressTurns: null, futureLimit: 9 },
+    resume: { autoResumeOnRestore: "ask", futureResume: "keep" },
   });
   assert.deepEqual(readdirSync(directory), ["pi-goal.json"]);
 });
@@ -159,6 +187,7 @@ test("readGoalSettings distinguishes missing, loaded, legacy, malformed, and unr
     settings: {
       rpc: { enabled: false },
       continuationLimits: { automaticTurns: 25, noProgressTurns: 3 },
+      resume: { autoResumeOnRestore: "ask" },
     },
     legacyExperimentalGoals: true,
   });
