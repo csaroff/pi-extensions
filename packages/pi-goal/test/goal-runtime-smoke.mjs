@@ -152,7 +152,7 @@ async function createHarness(
     });
     assert.deepEqual(result.extensionsResult.errors, []);
     createdSession = result.session;
-    await bindSession(result.session, model);
+    await bindSession(result.session, model, modelRuntime);
     return {
       agentDir,
       extensions: result.extensionsResult.extensions.map((extension) => ({
@@ -663,7 +663,7 @@ async function manualCompactionScenario() {
   }
 }
 
-function restoredGoal(sessionManager) {
+function restoredGoal(sessionManager, waiting) {
   const now = Date.now();
   sessionManager.appendCustomEntry("goal-state", {
     goal: {
@@ -676,18 +676,19 @@ function restoredGoal(sessionManager) {
       tokensUsed: 0,
       timeUsedSeconds: 0,
       baselineTokens: 0,
+      ...(waiting ? { waiting } : {}),
     },
   });
 }
 
-async function noInputRestoreScenario(mode) {
+async function noInputRestoreScenario(mode, waiting) {
   // Exercise the actual short-lived host; it has no public root export.
   const printModule = new URL("./modes/print-mode.js", import.meta.resolve("@earendil-works/pi-coding-agent"));
   const { runPrintMode } = await import(printModule.href);
   const harness = await createHarness(
     [completionResponse],
     {},
-    restoredGoal,
+    (sessionManager) => restoredGoal(sessionManager, waiting),
     { resume: { autoResumeOnRestore: "auto" } },
     {},
     undefined,
@@ -712,14 +713,14 @@ async function noInputRestoreScenario(mode) {
   }
 }
 
-async function rejectedRestoreRecoveryScenario() {
+async function rejectedRestoreRecoveryScenario(manual = false) {
   const errors = [];
   let selectedModel;
   const harness = await createHarness(
     [completionResponse],
     {},
     restoredGoal,
-    { resume: { autoResumeOnRestore: "auto" } },
+    { resume: { autoResumeOnRestore: manual ? "off" : "auto" } },
     {},
     undefined,
     async (session, model) => {
@@ -729,9 +730,15 @@ async function rejectedRestoreRecoveryScenario() {
     },
   );
   try {
+    if (manual) await harness.session.prompt("/goal resume");
+    await waitFor(() => errors.length > 0, "rejected preflight acknowledgement");
     // The host alone receives this rejection, before before_agent_start or agent_settled.
     const deadline = Date.now() + 40_000;
-    while (persistedGoalStatus(harness.session) !== "paused") {
+    while (
+      manual
+        ? persistedGoalState(harness.session)?.goal?.id !== "restored-runtime-goal"
+        : persistedGoalStatus(harness.session) !== "paused"
+    ) {
       assert.ok(Date.now() < deadline, "restore did not recover from preflight rejection");
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
@@ -746,9 +753,58 @@ async function rejectedRestoreRecoveryScenario() {
   }
 }
 
+async function lateRestorePreflightScenario() {
+  const observedSignals = [];
+  let accepted = false;
+  let release;
+  const preflight = new Promise((resolve) => {
+    release = resolve;
+  });
+  const harness = await createHarness(
+    [
+      (_context, options) => {
+        observedSignals.push(options?.signal?.aborted === true);
+        return fauxAssistantMessage("Synthetic cancelled startup");
+      },
+    ],
+    {},
+    restoredGoal,
+    { resume: { autoResumeOnRestore: "auto" } },
+    {},
+    undefined,
+    async (session, _model, modelRuntime) => {
+      // Delay real authentication after Goal's input boundary, then run the real check.
+      const check = modelRuntime.checkAuth.bind(modelRuntime);
+      modelRuntime.hasConfiguredAuth = () => false;
+      modelRuntime.checkAuth = async (...args) => {
+        accepted = true;
+        await preflight;
+        return check(...args);
+      };
+      await session.bindExtensions({});
+    },
+  );
+  try {
+    await waitFor(() => accepted, "restore accepted before delayed authentication");
+    await waitFor(() => persistedGoalStatus(harness.session) === "paused", "restore startup timeout", 40_000);
+    release();
+    await waitFor(() => harness.lifecycleEvents.includes("agent_settled"), "cancelled late startup settlement");
+    assert.ok(observedSignals.every(Boolean), "late startup must not make a live provider request");
+    assert.equal(persistedGoalStatus(harness.session), "paused");
+  } finally {
+    release();
+    await harness.cleanup();
+  }
+}
+
 await noInputRestoreScenario("text");
 await noInputRestoreScenario("json");
+for (const mode of ["text", "json"]) {
+  await noInputRestoreScenario(mode, { reason: "external work", resumeAt: Date.now() - 1 });
+}
 await rejectedRestoreRecoveryScenario();
+await rejectedRestoreRecoveryScenario(true);
+await lateRestorePreflightScenario();
 await agentDirectoryIsolationScenario();
 await normalContinuationScenario();
 await runawayNoProgressScenario();

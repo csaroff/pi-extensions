@@ -5,7 +5,8 @@ import type { ContinuationTicket, GoalRuntime, StatusContext } from "./runtime.j
 const RESTORE_START_TIMEOUT_MS = 30_000;
 
 interface RestoreTask {
-  ticket: ContinuationTicket;
+  ticket: Pick<ContinuationTicket, "goalId" | "marker">;
+  recover?: () => void;
   generation: number;
   signal: AbortSignal;
   onAbort: () => void;
@@ -24,25 +25,46 @@ export class GoalRestoreContinuation {
   }
 
   start(ctx: StatusContext, goal: ActiveGoal): Promise<void> {
-    if (!this.runtime.requestContinuation(goal)) return Promise.resolve();
-    const ticket = this.runtime.continuationIntent;
+    if (
+      (ctx.mode === "print" || ctx.mode === "json") &&
+      goal.waiting?.resumeAt !== undefined &&
+      goal.waiting.resumeAt <= Date.now()
+    ) {
+      this.runtime.dispatchDueGoalWait(ctx);
+    }
+    const current = this.runtime.activeGoal;
+    if (!current || current.id !== goal.id || current.waiting || !this.runtime.ownsWorkflow(current)) {
+      return Promise.resolve();
+    }
+    this.runtime.requestContinuation(current);
+    const ticket = this.runtime.continuationIntent ?? this.runtime.continuationDelivery;
     if (!ticket) return Promise.resolve();
+    const completion = this.observe(ctx, ticket);
+    this.runtime.scheduleContinuationDispatch(ctx, goal.id);
+    return completion;
+  }
+
+  watchOwnedPrompt(ctx: StatusContext, goalId: string, marker: string, recover: () => void) {
+    void this.observe(ctx, { goalId, marker }, recover);
+  }
+
+  private observe(ctx: StatusContext, ticket: RestoreTask["ticket"], recover?: () => void): Promise<void> {
     this.dispose();
     const signal = this.runtime.menuController.signal;
     const completion = new Promise<void>((resolve) => {
       const task: RestoreTask = {
         ticket,
+        recover,
         generation: this.runtime.menuGeneration,
         signal,
         onAbort: () => this.finish(task),
         resolve,
-        waitForSettlement: ctx.mode === "print" || ctx.mode === "json",
+        waitForSettlement: !recover && (ctx.mode === "print" || ctx.mode === "json"),
       };
       this.task = task;
       signal.addEventListener("abort", task.onAbort, { once: true });
       this.watchStartup(ctx, task);
     });
-    this.runtime.scheduleContinuationDispatch(ctx, goal.id);
     return completion;
   }
 
@@ -94,7 +116,8 @@ export class GoalRestoreContinuation {
       const goal = this.runtime.activeGoal;
       const pending =
         this.runtime.continuationIntent?.marker === task.ticket.marker ||
-        this.runtime.continuationDelivery?.marker === task.ticket.marker;
+        this.runtime.continuationDelivery?.marker === task.ticket.marker ||
+        this.runtime.pendingGoalPromptMarkers.has(task.ticket.marker);
       if (goal?.id !== task.ticket.goalId || !this.runtime.ownsWorkflow(goal) || !pending) {
         this.finish(task);
         return;
@@ -107,17 +130,24 @@ export class GoalRestoreContinuation {
       // Pi reports asynchronous send failures only to its host. Bound an unacknowledged
       // restore instead of retaining its delivery forever or guessing authentication state.
       try {
-        this.runtime.stopActiveGoal(ctx, { kind: "explicit_pause", expectedGoalId: goal.id });
+        if (task.recover) {
+          this.runtime.cancelOwnedGoalPrompt(task.ticket.marker);
+          task.recover();
+        } else {
+          this.runtime.stopActiveGoal(ctx, { kind: "explicit_pause", expectedGoalId: goal.id });
+        }
         this.finish(task);
         if (
           task.generation === this.runtime.menuGeneration &&
           !task.signal.aborted &&
-          this.runtime.activeGoal?.id === task.ticket.goalId &&
-          this.runtime.activeGoal.status === "paused"
+          (task.recover ||
+            (this.runtime.activeGoal?.id === task.ticket.goalId && this.runtime.activeGoal.status === "paused"))
         ) {
           notifyTerminal(
             ctx.ui,
-            "Restored Goal did not start within 30 seconds. It was paused; use /goal resume when Pi is ready.",
+            task.recover
+              ? "Goal resume did not start within 30 seconds. The original Goal was restored; use /goal resume when Pi is ready."
+              : "Restored Goal did not start within 30 seconds. It was paused; use /goal resume when Pi is ready.",
             "warning",
           );
         }

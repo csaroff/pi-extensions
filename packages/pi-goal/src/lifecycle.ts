@@ -53,8 +53,10 @@ export function registerGoalLifecycle(
   // starts true so handlers keep working on runners where session_start was
   // never emitted (for example late extension loading).
   let sessionActive = true;
+  let cancelledStartup = false;
   pi.on("session_start", async (_event, ctx) => {
     sessionActive = true;
+    cancelledStartup = false;
     runtime.bindWorkflowSession(ctx.sessionManager);
     runtime.replaceMenuSession();
     runtime.clearCompletionStatusTimer();
@@ -132,7 +134,7 @@ export function registerGoalLifecycle(
         const restored = resumeRestoredGoal(ctx, runtime.activeGoal.id);
         // Short-lived hosts dispose immediately after session_start without new input.
         if (ctx.mode === "print" || ctx.mode === "json") await restored;
-      } else if (resumeMode === "ask" && ctx.hasUI && ctx.mode !== "print") {
+      } else if (resumeMode === "ask" && ctx.hasUI && ctx.mode !== "print" && ctx.mode !== "json") {
         void promptRestoreChoice(ctx, runtime.activeGoal);
       }
       return;
@@ -214,6 +216,7 @@ export function registerGoalLifecycle(
 
   pi.on("session_shutdown", (_event, ctx) => {
     sessionActive = false;
+    cancelledStartup = false;
     const shutdownSession = ctx.sessionManager;
     runController.unbindSession();
     runtime.closeMenuSession();
@@ -390,6 +393,7 @@ export function registerGoalLifecycle(
 
   pi.on("context", (event, ctx) => {
     if (!sessionActive) return;
+    if (cancelledStartup) abortCurrentTurn(ctx);
     const keptMessages = event.messages.filter((message) => runtime.keepBudgetWrapUpMessage(message));
     const hasGoalContractHistory =
       keptMessages.some(isGoalContextContract) || runtime.hasGoalContextContractHistory(ctx);
@@ -411,6 +415,10 @@ export function registerGoalLifecycle(
 
   pi.on("tool_call", (event, ctx) => {
     if (!sessionActive) return;
+    if (cancelledStartup) {
+      abortCurrentTurn(ctx);
+      return { block: true, reason: "Goal startup was cancelled before this prompt reached the model." };
+    }
     runtime.markAgentToolAttempted();
     if (
       runtime.activeGoal?.status === "budget_limited" &&
@@ -465,6 +473,12 @@ export function registerGoalLifecycle(
 
   pi.on("before_agent_start", (event, ctx) => {
     if (!sessionActive) return;
+    // Input can be accepted before asynchronous preflight. Check again after it finishes.
+    cancelledStartup = runtime.isCancelledOwnedPrompt(event.prompt);
+    if (cancelledStartup) {
+      abortCurrentTurn(ctx);
+      return;
+    }
     runtime.clearAgentRun();
     // Pi-owned retries emit agent_start directly. Reaching a normal prompt
     // boundary means cleanup no longer owns the next run, so the hard-cap guard
@@ -556,7 +570,7 @@ export function registerGoalLifecycle(
   });
 
   pi.on("agent_end", (event, ctx) => {
-    if (!sessionActive) return;
+    if (!sessionActive || cancelledStartup) return;
     const run = runtime.finishAgentRun();
     if (run.goalId === null) return;
     if (!runtime.canRecordGoalUsage() && !runtime.hasActiveBudgetWrapUp()) return;
@@ -644,6 +658,7 @@ export function registerGoalLifecycle(
 
   pi.on("agent_settled", (_event, ctx) => {
     if (!sessionActive) return;
+    cancelledStartup = false;
     if (runtime.activeGoal?.status === "active" && !runtime.ownsWorkflow(runtime.activeGoal)) {
       runtime.cancelContinuationWork();
       runtime.clearGoalRecovery();

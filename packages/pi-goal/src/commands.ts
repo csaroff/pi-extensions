@@ -264,13 +264,12 @@ export class GoalCommandController {
     if (!this.runtime.ownsWorkflow(this.runtime.activeGoal)) return;
     this.runtime.updateStatus(ctx, this.runtime.activeGoal);
     const resumedGoal = this.runtime.activeGoal;
-    const sent = await this.runtime.sendOwnedGoalPrompt(
-      ctx,
-      resumedGoal.id,
-      buildResumePrompt(resumedGoal, stoppedStatus),
-    );
-    if (!sent) {
-      if (this.runtime.activeGoal?.id === resumedGoal.id && this.runtime.activeGoal.status === "active") {
+    const restoreOriginalGoal = () => {
+      if (
+        this.runtime.activeGoal?.id === resumedGoal.id &&
+        this.runtime.activeGoal.status === "active" &&
+        this.runtime.ownsWorkflow(this.runtime.activeGoal)
+      ) {
         this.runtime.activeGoal = stoppedGoal;
         this.runtime.persistGoal(this.runtime.activeGoal);
         this.runtime.updateStatus(ctx, this.runtime.activeGoal);
@@ -279,6 +278,17 @@ export class GoalCommandController {
         }
         if (stoppedGoal.status !== "active" && acquiredForResume) this.runtime.releaseWorkflow();
       }
+    };
+    const sent = await this.runtime.sendOwnedGoalPrompt(
+      ctx,
+      resumedGoal.id,
+      buildResumePrompt(resumedGoal, stoppedStatus),
+      true,
+      undefined,
+      idleActiveGoal ? restoreOriginalGoal : undefined,
+    );
+    if (!sent) {
+      restoreOriginalGoal();
       return;
     }
     if (!this.runtime.ownsWorkflow(resumedGoal)) return;

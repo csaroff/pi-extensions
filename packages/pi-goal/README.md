@@ -157,6 +157,8 @@ It rejects active Goals with running work or queued Goal or session prompts.
 A failed active resume keeps workflow ownership; missing required tools pause the Goal before releasing it.
 Auto restore waits for Goal settlement in print and JSON hosts, including runs without new input.
 An unacknowledged restore pauses after a 30-second idle startup wait; fix Pi's reported error and use `/goal resume` to retry.
+An unacknowledged idle-active manual resume restores the original Goal ID and state after that deadline and permits a retry.
+Late cancelled startup prompts are aborted at the model boundary, and already-due Auto wait deadlines run before headless shutdown.
 See [restore settings](./docs/settings.md#resume-on-restore) for automatic and non-interactive behavior.
 A restored waiting Goal remains quiet unless explicitly resumed, excludes offline and waiting wall time from active elapsed time, and restores only its absolute optional deadline timer.
 An active restored goal pauses when workflow admission is busy or either required terminal tool is missing, without changing the active tool set.

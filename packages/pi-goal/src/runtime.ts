@@ -966,12 +966,15 @@ export class GoalRuntime {
     prompt: string,
     resetSafetyEpoch = true,
     isCurrent?: () => boolean,
+    recoverUnstarted?: () => void,
   ) {
     if (this.activeGoal?.id !== goalId || !this.ownsWorkflow(this.activeGoal)) return false;
     const pending = this.rememberPendingGoalPrompt(goalId, prompt, resetSafetyEpoch);
+    if (recoverUnstarted) this.restoreContinuation.watchOwnedPrompt(ctx, goalId, pending.marker, recoverUnstarted);
     const sent = await sendPrompt(this.pi, ctx, pending.prompt, isCurrent);
     if (!sent || (isCurrent && !isCurrent()) || this.activeGoal?.id !== goalId || !this.ownsWorkflow(this.activeGoal)) {
       this.pendingGoalPromptMarkers.delete(pending.marker);
+      if (recoverUnstarted) this.restoreContinuation.acknowledge(pending.marker);
       return false;
     }
     return true;
@@ -1003,6 +1006,24 @@ export class GoalRuntime {
     if (!this.continuationDispatchTimer) return;
     clearTimeout(this.continuationDispatchTimer);
     this.continuationDispatchTimer = undefined;
+  }
+
+  cancelOwnedGoalPrompt(marker: string) {
+    const pending = this.pendingGoalPromptMarkers.get(marker);
+    if (!pending) return;
+    this.pendingGoalPromptMarkers.delete(marker);
+    this.rememberCancelledGoalPromptMarker(marker, pending.prompt);
+  }
+
+  isCancelledOwnedPrompt(prompt: string) {
+    const goalMarker = extractGoalPromptMarker(prompt);
+    const continuation = extractContinuationMarker(prompt);
+    const cancelled = goalMarker
+      ? this.cancelledGoalPromptMarkers.get(goalMarker)
+      : continuation
+        ? this.cancelledContinuationMarkers.get(continuation)
+        : undefined;
+    return cancelled !== undefined && preservesOwnedPromptAtTerminalBoundary(prompt, cancelled);
   }
 
   consumeCancelledGoalPrompt(prompt: string) {
@@ -1326,6 +1347,7 @@ export class GoalRuntime {
       return undefined;
     }
     this.pendingGoalPromptMarkers.delete(marker);
+    this.restoreContinuation.acknowledge(marker);
     this.rememberClaimedGoalPromptMarker(marker, inputFingerprint(prompt));
     return pending;
   }

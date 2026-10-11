@@ -87,6 +87,7 @@ Reload, replacement, and shutdown clear that in-memory ownership.
 - **Auto** requests one continuation after restoring an eligible active Goal, including in non-interactive modes.
   It can consume provider tokens and cost without a new user command.
   Print and JSON hosts wait for restored work to settle before exiting, even without new input.
+  An already-due external wait starts through the settled dispatcher before startup returns; future and indefinite waits remain quiet.
 - **Off** restores the Goal without requesting a continuation or showing a dialog.
 
 Stopped Goals never resume automatically. Budget, automatic-work, no-progress, required-tool, and workflow-admission checks still apply before restore work starts.
@@ -96,6 +97,8 @@ An explicit **Resume now** choice wakes a waiting Goal through the normal waitin
 **Clear goal** uses the normal clear operation; it does not abort unrelated in-flight work.
 If a restore continuation has no startup acknowledgement after 30 seconds while Pi is idle with no queued messages, pi-goal pauses the Goal, cancels the stale delivery, and releases workflow ownership.
 This also covers asynchronous preflight failures, such as a missing model or unavailable provider authentication, which Pi reports only to its host.
+An idle-active manual `/goal resume` uses the same startup deadline but restores the original Goal ID and state with its ownership retained instead of pausing it.
+Late prompts that passed input handling before cancellation are aborted at the model boundary; they cannot restart cancelled work.
 Fix the reported Pi error, then use `/goal resume` to retry.
 Busy work and queued messages defer this recovery check; acknowledged work uses the normal Goal safety limits.
 Shutdown or session replacement cancels the dialog, startup timer, and headless settlement wait, and ignores late responses.
