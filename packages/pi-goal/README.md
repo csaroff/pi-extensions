@@ -157,7 +157,7 @@ The manager and command hints use the same idle and pending-work checks as the c
 It rejects active Goals with running work or queued Goal or session prompts.
 A failed active resume keeps workflow ownership; missing required tools pause the Goal before releasing it.
 Auto restore in print and JSON hosts starts after all `session_start` handlers finish and waits for Goal settlement, including runs without new input.
-**Known headless limitation:** Auto currently runs inside resource discovery, before dynamically discovered resources are installed, and can delay later discovery handlers. Use Off for affected headless sessions. A complete no-input fix requires an awaited Pi hook after resource installation.
+**Known headless limitations:** Auto currently runs inside resource discovery, before dynamically discovered resources are installed, and can delay later discovery handlers. It also runs before initial CLI or stdin input is admitted, including `/goal pause`, so that command cannot prevent the initial paid work. Set On restore to Off before running affected headless sessions. A complete fix requires a public awaited Pi hook after resource installation that also distinguishes input-free startup from pending host input.
 An unacknowledged restore pauses after a 30-second idle startup wait; fix Pi's reported error and use `/goal resume` to retry.
 An unacknowledged idle-active manual resume restores the original Goal ID and state after that deadline and permits a retry.
 Late cancelled startup prompts are aborted by their exact run signal at the model boundary, and already-due Auto wait deadlines run before headless shutdown.

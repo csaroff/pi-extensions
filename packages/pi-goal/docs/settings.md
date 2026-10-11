@@ -90,7 +90,7 @@ Reload, replacement, and shutdown clear that in-memory ownership.
   An already-due external wait starts through the settled dispatcher before startup returns; future and indefinite waits remain quiet.
 - **Off** restores the Goal without requesting a continuation or showing a dialog.
 
-**Known headless Auto limitation:** Pi applies dynamically discovered resources only after all discovery handlers return. The current headless settlement barrier runs inside that pass, so it can delay later handlers and cannot use dynamically discovered resources in its initial work. Use **Off** for affected print or JSON sessions. A complete no-input barrier requires a public awaited hook after resource installation, which Pi does not currently provide.
+**Known headless Auto limitations:** Pi applies dynamically discovered resources only after all discovery handlers return. The current headless settlement barrier runs inside that pass, so it can delay later handlers and cannot use dynamically discovered resources in its initial work. The print/JSON host also admits initial CLI and stdin messages only after binding finishes; even an initial `/goal pause` can therefore be delayed until restored paid work settles. Set **On restore** to **Off** before running affected headless sessions. A complete fix requires a public awaited hook after resource installation, with startup-input admission or input-free status, which Pi does not currently provide.
 
 Stopped Goals never resume automatically. Budget, automatic-work, no-progress, required-tool, and workflow-admission checks still apply before restore work starts.
 Automatic restoration preserves existing safety counters and does not wake an external wait; existing wait deadlines remain in effect in all three modes.
