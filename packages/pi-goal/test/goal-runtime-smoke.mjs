@@ -765,7 +765,7 @@ async function rejectedRestoreRecoveryScenario(manual = false) {
   }
 }
 
-async function lateRestorePreflightScenario() {
+async function lateRestorePreflightScenario(stopOperation) {
   const observedSignals = [];
   let accepted = false;
   let release;
@@ -781,7 +781,7 @@ async function lateRestorePreflightScenario() {
     ],
     {},
     restoredGoal,
-    { resume: { autoResumeOnRestore: "auto" } },
+    { resume: { autoResumeOnRestore: stopOperation ? "off" : "auto" } },
     {},
     undefined,
     async (session, _model, modelRuntime) => {
@@ -797,12 +797,14 @@ async function lateRestorePreflightScenario() {
     },
   );
   try {
+    if (stopOperation) await harness.session.prompt("/goal resume");
     await waitFor(() => accepted, "restore accepted before delayed authentication");
-    await waitFor(() => persistedGoalStatus(harness.session) === "paused", "restore startup timeout", 40_000);
+    if (stopOperation) await harness.session.prompt(`/goal ${stopOperation}`);
+    else await waitFor(() => persistedGoalStatus(harness.session) === "paused", "restore startup timeout", 40_000);
     release();
     await waitFor(() => harness.lifecycleEvents.includes("agent_settled"), "cancelled late startup settlement");
     assert.ok(observedSignals.every(Boolean), "late startup must not make a live provider request");
-    assert.equal(persistedGoalStatus(harness.session), "paused");
+    assert.equal(persistedGoalStatus(harness.session), stopOperation === "clear" ? null : "paused");
   } finally {
     release();
     await harness.cleanup();
@@ -817,6 +819,8 @@ for (const mode of ["text", "json"]) {
 await rejectedRestoreRecoveryScenario();
 await rejectedRestoreRecoveryScenario(true);
 await lateRestorePreflightScenario();
+await lateRestorePreflightScenario("pause");
+await lateRestorePreflightScenario("clear");
 await agentDirectoryIsolationScenario();
 await normalContinuationScenario();
 await runawayNoProgressScenario();

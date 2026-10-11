@@ -90,6 +90,8 @@ Reload, replacement, and shutdown clear that in-memory ownership.
   An already-due external wait starts through the settled dispatcher before startup returns; future and indefinite waits remain quiet.
 - **Off** restores the Goal without requesting a continuation or showing a dialog.
 
+**Known headless Auto limitation:** Pi applies dynamically discovered resources only after all discovery handlers return. The current headless settlement barrier runs inside that pass, so it can delay later handlers and cannot use dynamically discovered resources in its initial work. Use **Off** for affected print or JSON sessions. A complete no-input barrier requires a public awaited hook after resource installation, which Pi does not currently provide.
+
 Stopped Goals never resume automatically. Budget, automatic-work, no-progress, required-tool, and workflow-admission checks still apply before restore work starts.
 Automatic restoration preserves existing safety counters and does not wake an external wait; existing wait deadlines remain in effect in all three modes.
 An explicit **Resume now** choice wakes a waiting Goal through the normal waiting-resume path without resetting its safety epoch.
@@ -99,6 +101,7 @@ If a restore continuation has no startup acknowledgement after 30 seconds while 
 This also covers asynchronous preflight failures, such as a missing model or unavailable provider authentication, which Pi reports only to its host.
 An idle-active manual `/goal resume` uses the same startup deadline but restores the original Goal ID and state with its ownership retained instead of pausing it.
 Late prompts that passed input handling before cancellation are aborted at the model boundary; they cannot restart cancelled work.
+Stopped and cleared transitions cancel both pending and accepted Goal prompt markers by exact Goal identity, covering authentication, compaction, and image preflight. Compaction alone does not cancel those markers.
 Fix the reported Pi error, then use `/goal resume` to retry.
 Busy work and queued messages defer this recovery check; acknowledged work uses the normal Goal safety limits.
 Accepted input invalidates an open restore dialog. Choices are applied only while Pi is idle with no owned run, queued messages, pending Goal prompt, or continuation; a late choice cannot stop or alter newer work.
