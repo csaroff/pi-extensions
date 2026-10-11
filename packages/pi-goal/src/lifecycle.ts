@@ -129,7 +129,9 @@ export function registerGoalLifecycle(
       runtime.restoreGoalWaitTimer(ctx);
       const resumeMode = runtime.settings.resume.autoResumeOnRestore;
       if (resumeMode === "auto") {
-        resumeRestoredGoal(ctx, runtime.activeGoal.id);
+        const restored = resumeRestoredGoal(ctx, runtime.activeGoal.id);
+        // Short-lived hosts dispose immediately after session_start without new input.
+        if (ctx.mode === "print" || ctx.mode === "json") await restored;
       } else if (resumeMode === "ask" && ctx.hasUI && ctx.mode !== "print") {
         void promptRestoreChoice(ctx, runtime.activeGoal);
       }
@@ -153,10 +155,8 @@ export function registerGoalLifecycle(
   });
 
   function resumeRestoredGoal(ctx: StatusContext, goalId: string) {
-    if (runtime.activeGoal?.id !== goalId) return;
-    if (runtime.requestContinuation(runtime.activeGoal)) {
-      runtime.scheduleContinuationDispatch(ctx, goalId);
-    }
+    if (runtime.activeGoal?.id !== goalId) return Promise.resolve();
+    return runtime.restoreContinuation.start(ctx, runtime.activeGoal);
   }
 
   const RESTORE_RESUME = "Resume now";
@@ -194,7 +194,7 @@ export function registerGoalLifecycle(
           // An explicit choice can wake a wait; automatic restoration cannot.
           await commands.resumeGoal(ctx);
         } else {
-          resumeRestoredGoal(ctx, goalId);
+          await resumeRestoredGoal(ctx, goalId);
         }
         return;
       }
@@ -648,12 +648,14 @@ export function registerGoalLifecycle(
       runtime.cancelContinuationWork();
       runtime.clearGoalRecovery();
       runtime.clearSettledSafetyTracking();
+      runtime.restoreContinuation.settleIfDone(ctx);
       return;
     }
     runtime.finalizeSettledRecovery(ctx);
     const resumedWait = runtime.dispatchDueGoalWait(ctx);
     if (!resumedWait) runtime.dispatchContinuationIfSettled(ctx);
     runtime.clearSettledSafetyTracking();
+    runtime.restoreContinuation.settleIfDone(ctx);
   });
 
   function goalContractBoundaryResult(ctx: StatusContext, goal?: ActiveGoal) {

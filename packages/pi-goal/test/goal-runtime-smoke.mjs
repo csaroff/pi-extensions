@@ -15,7 +15,15 @@ import {
 
 const extensionPath = resolve(import.meta.dirname, "../src/goal.ts");
 
-async function createHarness(responses, fauxOptions = {}, prepareSession, goalSettings, piSettings = {}, managedRun) {
+async function createHarness(
+  responses,
+  fauxOptions = {},
+  prepareSession,
+  goalSettings,
+  piSettings = {},
+  managedRun,
+  bindSession = (session) => session.bindExtensions({}),
+) {
   const root = await mkdtemp(join(tmpdir(), "pi-goal-runtime-"));
   const agentDir = join(root, "agent");
   const cwd = join(root, "workspace");
@@ -144,7 +152,7 @@ async function createHarness(responses, fauxOptions = {}, prepareSession, goalSe
     });
     assert.deepEqual(result.extensionsResult.errors, []);
     createdSession = result.session;
-    await result.session.bindExtensions({});
+    await bindSession(result.session, model);
     return {
       agentDir,
       extensions: result.extensionsResult.extensions.map((extension) => ({
@@ -655,6 +663,92 @@ async function manualCompactionScenario() {
   }
 }
 
+function restoredGoal(sessionManager) {
+  const now = Date.now();
+  sessionManager.appendCustomEntry("goal-state", {
+    goal: {
+      id: "restored-runtime-goal",
+      text: "Complete and verify the restored objective",
+      status: "active",
+      startedAt: now,
+      updatedAt: now,
+      iteration: 1,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      baselineTokens: 0,
+    },
+  });
+}
+
+async function noInputRestoreScenario(mode) {
+  // Exercise the actual short-lived host; it has no public root export.
+  const printModule = new URL("./modes/print-mode.js", import.meta.resolve("@earendil-works/pi-coding-agent"));
+  const { runPrintMode } = await import(printModule.href);
+  const harness = await createHarness(
+    [completionResponse],
+    {},
+    restoredGoal,
+    { resume: { autoResumeOnRestore: "auto" } },
+    {},
+    undefined,
+    async (session) => {
+      const host = {
+        session,
+        setRebindSession() {},
+        async dispose() {
+          await session.extensionRunner.emit({ type: "session_shutdown", reason: "shutdown" });
+          session.dispose();
+        },
+      };
+      assert.equal(await runPrintMode(host, { mode, messages: [] }), 0);
+    },
+  );
+  try {
+    assert.equal(harness.faux.state.callCount, 1);
+    assert.equal(persistedGoalStatus(harness.session), null);
+    assert.ok(harness.lifecycleEvents.includes("agent_settled"));
+  } finally {
+    await harness.cleanup();
+  }
+}
+
+async function rejectedRestoreRecoveryScenario() {
+  const errors = [];
+  let selectedModel;
+  const harness = await createHarness(
+    [completionResponse],
+    {},
+    restoredGoal,
+    { resume: { autoResumeOnRestore: "auto" } },
+    {},
+    undefined,
+    async (session, model) => {
+      selectedModel = model;
+      session.agent.state.model = undefined;
+      await session.bindExtensions({ onError: (error) => errors.push(error) });
+    },
+  );
+  try {
+    // The host alone receives this rejection, before before_agent_start or agent_settled.
+    const deadline = Date.now() + 40_000;
+    while (persistedGoalStatus(harness.session) !== "paused") {
+      assert.ok(Date.now() < deadline, "restore did not recover from preflight rejection");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(errors.some((error) => /No model selected/.test(error.error)));
+    assert.equal(harness.faux.state.callCount, 0);
+    await harness.session.setModel(selectedModel);
+    await harness.session.prompt("/goal resume");
+    await waitFor(() => persistedGoalStatus(harness.session) === null, "repaired restore resume");
+    assert.equal(harness.faux.state.callCount, 1);
+  } finally {
+    await harness.cleanup();
+  }
+}
+
+await noInputRestoreScenario("text");
+await noInputRestoreScenario("json");
+await rejectedRestoreRecoveryScenario();
 await agentDirectoryIsolationScenario();
 await normalContinuationScenario();
 await runawayNoProgressScenario();

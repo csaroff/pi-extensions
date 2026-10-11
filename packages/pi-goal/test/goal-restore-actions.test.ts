@@ -82,8 +82,13 @@ test.each(["auto", "ask"] as const)(
     vi.useFakeTimers();
     const restored = restore(mode, {}, { select: async () => "Resume now" });
     await flushChoice();
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(0);
     assert.equal(restored.mock.sentUserMessages.length, 1);
+    restored.mock.events.get("before_agent_start")?.[0]?.(
+      { prompt: restored.mock.sentUserMessages[0]?.text },
+      restored.ctx,
+    );
+    assert.equal(requireLastGoal(restored.mock).status, "active");
     assert.equal(requireLastGoal(restored.mock).automaticModelTurns, 2);
     restored.mock.events.get("agent_settled")?.[0]?.({}, restored.ctx);
     assert.equal(restored.mock.sentUserMessages.length, 1);

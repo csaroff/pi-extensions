@@ -18,6 +18,7 @@ import {
   serializeGoalState,
 } from "./persistence.js";
 import { buildContinuePrompt, type GoalStatus } from "./prompts.js";
+import { GoalRestoreContinuation } from "./restore-continuation.js";
 import { nextToolFreeRepeatState, resetGoalSafetyEpoch } from "./safety.js";
 
 export { queueGoalSafetyReset, resetGoalSafetyEpoch } from "./safety.js";
@@ -213,6 +214,7 @@ export class GoalRuntime {
   completionStatusTimer?: NodeJS.Timeout;
   private continuationDispatchTimer?: NodeJS.Timeout;
   private readonly goalWaitTimer = new GoalWaitTimer();
+  readonly restoreContinuation = new GoalRestoreContinuation(this);
   private goalWaitDeadlineRetry?: {
     goalId: string;
     resumeAt: number;
@@ -447,6 +449,10 @@ export class GoalRuntime {
     return this.continuationIntent?.goalId === goalId || this.continuationDelivery?.goalId === goalId;
   }
 
+  hasPendingGoalPromptForGoal(goalId: string) {
+    return [...this.pendingGoalPromptMarkers.values()].some((prompt) => prompt.goalId === goalId);
+  }
+
   enterGoalWait(ctx: StatusContext, goalId: string, waiting: GoalWait) {
     const goal = this.activeGoal;
     if (!goal || goal.id !== goalId || !this.ownsWorkflow(goal)) return undefined;
@@ -573,6 +579,7 @@ export class GoalRuntime {
   updateStatus(ctx: StatusContext, goal: ActiveGoal) {
     this.clearCompletionStatusTimer();
     ctx.ui.setStatus(STATUS_KEY, formatStatus(goal, this.settings.continuationLimits.automaticTurns));
+    this.restoreContinuation.settleIfDone(ctx);
   }
 
   stopActiveGoal(ctx: StatusContext, request: GoalStopRequest) {
@@ -908,6 +915,7 @@ export class GoalRuntime {
   }
 
   clearContinuationTracking() {
+    this.restoreContinuation.dispose();
     this.clearContinuationDispatchTimer();
     this.continuationIntent = undefined;
     this.continuationDelivery = undefined;
@@ -970,6 +978,7 @@ export class GoalRuntime {
   }
 
   cancelContinuationWork() {
+    this.restoreContinuation.cancelStartup();
     this.clearContinuationDispatchTimer();
     if (this.continuationDelivery) {
       this.rememberCancelledContinuationMarker(this.continuationDelivery);
@@ -1157,6 +1166,7 @@ export class GoalRuntime {
       const delivery = this.continuationDelivery;
       if (preservesOwnedPromptAtTerminalBoundary(prompt, delivery.prompt)) {
         this.continuationDelivery = undefined;
+        this.restoreContinuation.acknowledge(marker);
         this.rememberClaimedContinuationMarker(marker, prompt);
         return marker.split(":", 1)[0];
       }
@@ -1214,6 +1224,7 @@ export class GoalRuntime {
     this.clearPersistedGoal(ctx.cwd, clearedGoal, reason);
     ctx.ui.setStatus(STATUS_KEY, undefined);
     if (releaseWorkflow) this.releaseWorkflow();
+    this.restoreContinuation.settleIfDone(ctx);
   }
 
   snapshotSettingsApplicationState(): GoalSettingsRuntimeSnapshot {

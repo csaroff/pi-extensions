@@ -16,6 +16,7 @@ import {
   formatError,
   type GoalRuntime,
   goalSummary,
+  hasPendingMessages,
   isResumableGoalStatus,
   nextGoalInstance,
   queueGoalSafetyReset,
@@ -213,7 +214,10 @@ export class GoalCommandController {
     const idleActiveGoal =
       this.runtime.activeGoal.status === "active" &&
       this.runtime.agentRunGoalId === undefined &&
-      !this.runtime.hasContinuationWorkForGoal(this.runtime.activeGoal.id);
+      !this.runtime.hasContinuationWorkForGoal(this.runtime.activeGoal.id) &&
+      !this.runtime.hasPendingGoalPromptForGoal(this.runtime.activeGoal.id) &&
+      ctx.isIdle?.() === true &&
+      !hasPendingMessages(ctx);
     if (!isResumableGoalStatus(this.runtime.activeGoal.status) && !idleActiveGoal) {
       notifyTerminal(
         ctx.ui,
@@ -229,15 +233,18 @@ export class GoalCommandController {
       notifyTerminal(ctx.ui, `Goal token budget is still reached: ${formatBudget(this.runtime.activeGoal)}`, "warning");
       return;
     }
+    const retainedOwner = this.runtime.ownsWorkflow(this.runtime.activeGoal);
     if (!this.runtime.acquireWorkflow(ctx.sessionManager)) {
       this.reportWorkflowBusy(ctx);
       return;
     }
+    const acquiredForResume = !retainedOwner;
     try {
       this.runtime.assertGoalToolsAvailable();
     } catch (error) {
       notifyTerminal(ctx.ui, `Cannot resume /goal: ${formatError(error)}`, "error");
-      this.runtime.releaseWorkflow();
+      if (this.runtime.activeGoal.status === "active") this.runtime.pauseGoalForUnavailableTools(ctx, false);
+      else if (acquiredForResume) this.runtime.releaseWorkflow();
       return;
     }
     const stoppedGoal = this.runtime.activeGoal;
@@ -270,7 +277,7 @@ export class GoalCommandController {
         if (blocksStaleGoalToolCalls(this.runtime.activeGoal.status)) {
           this.runtime.blockStaleGoalToolCalls();
         }
-        this.runtime.releaseWorkflow();
+        if (stoppedGoal.status !== "active" && acquiredForResume) this.runtime.releaseWorkflow();
       }
       return;
     }

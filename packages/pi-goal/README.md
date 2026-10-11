@@ -153,6 +153,10 @@ An active restored goal at or above its finite automatic-work limit pauses befor
 By default, TUI and RPC ask whether to resume, pause, or clear a restored active Goal.
 Cancellation or the 30-second timeout leaves it active without starting work.
 Use `/goal resume` to continue an idle restored Goal directly.
+It rejects active Goals with running work or queued Goal or session prompts.
+A failed active resume keeps workflow ownership; missing required tools pause the Goal before releasing it.
+Auto restore waits for Goal settlement in print and JSON hosts, including runs without new input.
+An unacknowledged restore pauses after a 30-second idle startup wait; fix Pi's reported error and use `/goal resume` to retry.
 See [restore settings](./docs/settings.md#resume-on-restore) for automatic and non-interactive behavior.
 A restored waiting Goal remains quiet unless explicitly resumed, excludes offline and waiting wall time from active elapsed time, and restores only its absolute optional deadline timer.
 An active restored goal pauses when workflow admission is busy or either required terminal tool is missing, without changing the active tool set.
