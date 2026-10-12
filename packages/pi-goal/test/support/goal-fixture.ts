@@ -166,6 +166,7 @@ export function restoreStoredGoalForTest(
   extraEntries: Record<string, unknown>[] = [],
   contextOverrides: Record<string, unknown> = {},
   settingsPath?: string,
+  discover = true,
 ) {
   const branch = [
     {
@@ -183,6 +184,9 @@ export function restoreStoredGoalForTest(
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
   });
   mock.events.get("session_start")?.[0]?.({}, context.ctx);
+  if (discover && contextOverrides.mode !== "print" && contextOverrides.mode !== "json") {
+    void mock.events.get("resources_discover")?.[0]?.({ reason: "startup" }, context.ctx);
+  }
   return { mock, ...context, sessionGoal };
 }
 

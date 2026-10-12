@@ -23,6 +23,7 @@ async function createHarness(
   piSettings = {},
   managedRun,
   bindSession = (session) => session.bindExtensions({}),
+  yieldStartup = false,
 ) {
   const root = await mkdtemp(join(tmpdir(), "pi-goal-runtime-"));
   const agentDir = join(root, "agent");
@@ -121,7 +122,8 @@ async function createHarness(
               },
             });
             pi.on("session_start", async () => {
-              await Promise.resolve();
+              if (yieldStartup) await new Promise((done) => setTimeout(done, 0));
+              else await Promise.resolve();
               lifecycleEvents.push("session_start");
             });
             pi.on("agent_start", () => lifecycleEvents.push("agent_start"));
@@ -684,6 +686,37 @@ function restoredGoal(sessionManager, waiting) {
   });
 }
 
+async function interactiveRestoreStartupScenario(mode, waiting) {
+  const initializedAtRun = [];
+  const harness = await createHarness(
+    [completionResponse],
+    {},
+    (sessionManager) => restoredGoal(sessionManager, waiting),
+    { resume: { autoResumeOnRestore: "auto" } },
+    {},
+    undefined,
+    async (session, _model, _modelRuntime, lifecycleEvents) => {
+      const unsubscribe = session.subscribe((event) => {
+        if (event.type === "agent_start") initializedAtRun.push(lifecycleEvents.includes("session_start"));
+      });
+      try {
+        await session.bindExtensions({ mode });
+        await waitFor(() => persistedGoalStatus(session) === null, "interactive startup restore");
+        await session.agent.waitForIdle();
+      } finally {
+        unsubscribe();
+      }
+    },
+    true,
+  );
+  try {
+    assert.equal(harness.faux.state.callCount, 1);
+    assert.deepEqual(initializedAtRun, [true], "later startup initialization must precede interactive Goal work");
+  } finally {
+    await harness.cleanup();
+  }
+}
+
 async function noInputRestoreScenario(mode, waiting) {
   const initializedAtRun = [];
   // Exercise the actual short-lived host; it has no public root export.
@@ -818,6 +851,10 @@ for (const mode of ["text", "json"]) {
 }
 await rejectedRestoreRecoveryScenario();
 await rejectedRestoreRecoveryScenario(true);
+for (const mode of ["tui", "rpc"]) {
+  await interactiveRestoreStartupScenario(mode);
+  await interactiveRestoreStartupScenario(mode, { reason: "overdue", resumeAt: Date.now() - 1 });
+}
 await lateRestorePreflightScenario();
 await lateRestorePreflightScenario("pause");
 await lateRestorePreflightScenario("clear");

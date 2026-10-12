@@ -5,7 +5,12 @@ import { buildGoalMenuState, GOAL_MENU_ACTIONS } from "../src/menu.js";
 import { DEFAULT_GOAL_SETTINGS } from "../src/settings.js";
 import { requireLastGoal, restoreStoredGoalForTest, settingsPath } from "./support/goal-fixture.js";
 
-function restore(mode = "off", overrides: Record<string, unknown> = {}) {
+function restore(
+  mode = "off",
+  overrides: Record<string, unknown> = {},
+  discover = true,
+  waiting?: { reason: string; resumeAt: number },
+) {
   const path = settingsPath("final-feedback.json");
   writeFileSync(path, JSON.stringify({ resume: { autoResumeOnRestore: mode } }));
   return restoreStoredGoalForTest(
@@ -19,10 +24,12 @@ function restore(mode = "off", overrides: Record<string, unknown> = {}) {
       tokensUsed: 0,
       timeUsedSeconds: 0,
       baselineTokens: 0,
+      ...(waiting ? { waiting } : {}),
     },
     [],
     overrides,
     path,
+    discover,
   );
 }
 
@@ -47,6 +54,48 @@ test.each(["Keep paused", "Resume now", "Clear goal"])(
     await active.mock.events.get("session_shutdown")?.[0]?.({}, active.ctx);
   },
 );
+
+test.each(["tui", "rpc"])("%s restore dispatch waits for later startup handlers", async (mode) => {
+  vi.useFakeTimers();
+  for (const waiting of [undefined, { reason: "deadline", resumeAt: Date.now() - 1 }]) {
+    const active = restore("auto", { mode }, false, waiting);
+    // A later session_start handler is still awaiting its own initialization.
+    await vi.advanceTimersByTimeAsync(0);
+    assert.equal(active.mock.sentUserMessages.length, 0);
+    // Pi reaches resource discovery only after all session_start handlers return.
+    await active.mock.events.get("resources_discover")?.[0]?.({ reason: "startup" }, active.ctx);
+    await vi.advanceTimersByTimeAsync(0);
+    assert.equal(active.mock.sentUserMessages.length, 1);
+    await active.mock.events.get("session_shutdown")?.[0]?.({}, active.ctx);
+  }
+});
+
+test.each(["input", "session_shutdown"])("%s cancels restore intent before resource discovery", async (event) => {
+  vi.useFakeTimers();
+  const active = restore("auto", { mode: "rpc" }, false);
+  active.mock.events.get(event)?.[0]?.({ text: "new request", source: "user" }, active.ctx);
+  await active.mock.events.get("resources_discover")?.[0]?.({ reason: "startup" }, active.ctx);
+  await vi.advanceTimersByTimeAsync(0);
+  assert.equal(active.mock.sentUserMessages.length, 0);
+  if (event !== "session_shutdown") await active.mock.events.get("session_shutdown")?.[0]?.({}, active.ctx);
+});
+
+test("Ask dialog and Off wait timers start only after session-start initialization", async () => {
+  vi.useFakeTimers();
+  const select = vi.fn(async () => undefined);
+  const asking = restore("ask", { mode: "tui", hasUI: true, select }, false);
+  assert.equal(select.mock.calls.length, 0);
+  await asking.mock.events.get("resources_discover")?.[0]?.({ reason: "startup" }, asking.ctx);
+  assert.equal(select.mock.calls.length, 1);
+  await asking.mock.events.get("session_shutdown")?.[0]?.({}, asking.ctx);
+  const waiting = restore("off", { mode: "rpc" }, false, { reason: "deadline", resumeAt: Date.now() - 1 });
+  await vi.advanceTimersByTimeAsync(0);
+  assert.equal(waiting.mock.sentUserMessages.length, 0);
+  await waiting.mock.events.get("resources_discover")?.[0]?.({ reason: "startup" }, waiting.ctx);
+  await vi.advanceTimersByTimeAsync(0);
+  assert.equal(waiting.mock.sentUserMessages.length, 1);
+  await waiting.mock.events.get("session_shutdown")?.[0]?.({}, waiting.ctx);
+});
 
 test("headless Auto does not hold subsequent session_start handlers", async () => {
   vi.useFakeTimers();

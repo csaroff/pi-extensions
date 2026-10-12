@@ -56,6 +56,7 @@ export function registerGoalLifecycle(
   let cancelledRuns = new WeakSet<AbortSignal>();
   let restoreChoiceController: AbortController | undefined;
   let headlessRestore: { goalId: string; generation: number } | undefined;
+  let interactiveRestore: { goalId: string; generation: number } | undefined;
   const isCancelledRun = (ctx: StatusContext) => ctx.signal !== undefined && cancelledRuns.has(ctx.signal);
   pi.on("session_start", async (_event, ctx) => {
     sessionActive = true;
@@ -63,6 +64,7 @@ export function registerGoalLifecycle(
     restoreChoiceController?.abort();
     restoreChoiceController = undefined;
     headlessRestore = undefined;
+    interactiveRestore = undefined;
     runtime.bindWorkflowSession(ctx.sessionManager);
     runtime.replaceMenuSession();
     runtime.clearCompletionStatusTimer();
@@ -136,15 +138,10 @@ export function registerGoalLifecycle(
       runtime.updateStatus(ctx, runtime.activeGoal);
       const resumeMode = runtime.settings.resume.autoResumeOnRestore;
       const headlessAuto = resumeMode === "auto" && (ctx.mode === "print" || ctx.mode === "json");
-      // Do not dispatch even an overdue wait before later session_start handlers initialize.
-      if (!headlessAuto) runtime.restoreGoalWaitTimer(ctx);
-      if (headlessAuto) {
-        headlessRestore = { goalId: runtime.activeGoal.id, generation: runtime.menuGeneration };
-      } else if (resumeMode === "auto") {
-        void resumeRestoredGoal(ctx, runtime.activeGoal.id);
-      } else if (resumeMode === "ask" && ctx.hasUI && ctx.mode !== "print" && ctx.mode !== "json") {
-        void promptRestoreChoice(ctx, runtime.activeGoal);
-      }
+      // Defer timers and dialogs until all session_start handlers have initialized.
+      const pending = { goalId: runtime.activeGoal.id, generation: runtime.menuGeneration };
+      if (headlessAuto) headlessRestore = pending;
+      else interactiveRestore = pending;
       return;
     }
 
@@ -165,6 +162,24 @@ export function registerGoalLifecycle(
   });
 
   pi.on("resources_discover", async (_event, ctx) => {
+    const pendingInteractive = interactiveRestore;
+    interactiveRestore = undefined;
+    if (
+      sessionActive &&
+      pendingInteractive?.generation === runtime.menuGeneration &&
+      runtime.activeGoal?.id === pendingInteractive.goalId &&
+      runtime.activeGoal.status === "active" &&
+      runtime.ownsWorkflow(runtime.activeGoal)
+    ) {
+      // Detached dispatch preserves interactive startup. This hook is after all
+      // session_start handlers, not after dynamic resource installation.
+      runtime.restoreGoalWaitTimer(ctx);
+      const resumeMode = runtime.settings.resume.autoResumeOnRestore;
+      if (resumeMode === "auto") void resumeRestoredGoal(ctx, runtime.activeGoal.id);
+      else if (resumeMode === "ask" && ctx.hasUI && ctx.mode !== "print" && ctx.mode !== "json") {
+        void promptRestoreChoice(ctx, runtime.activeGoal);
+      }
+    }
     const pending = headlessRestore;
     headlessRestore = undefined;
     if (
@@ -258,6 +273,7 @@ export function registerGoalLifecycle(
     restoreChoiceController?.abort();
     restoreChoiceController = undefined;
     headlessRestore = undefined;
+    interactiveRestore = undefined;
     const shutdownSession = ctx.sessionManager;
     runController.unbindSession();
     runtime.closeMenuSession();
@@ -346,6 +362,7 @@ export function registerGoalLifecycle(
     restoreChoiceController?.abort();
     restoreChoiceController = undefined;
     headlessRestore = undefined;
+    interactiveRestore = undefined;
     if (event.source === "extension") {
       if (
         runtime.consumeCancelledGoalPrompt(event.text) ||
