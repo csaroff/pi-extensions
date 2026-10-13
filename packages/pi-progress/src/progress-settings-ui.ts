@@ -1,19 +1,16 @@
 import { stripVTControlCharacters } from "node:util";
+import { type ExtensionCommandContext, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import {
-  type ExtensionCommandContext,
-  getSelectListTheme,
-  getSettingsListTheme,
-} from "@earendil-works/pi-coding-agent";
-import {
+  Input,
   Key,
   matchesKey,
-  SelectList,
   type SettingItem,
   SettingsList,
   Text,
   type TuiMouseEvent,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
+import { sanitizeTerminalDocument } from "@narumitw/pi-tui-kit/terminal-document";
 import { sanitizeProgressText } from "./progress-renderer.js";
 import { PROGRESS_DISPLAY_MODES, type ProgressSettings } from "./settings.js";
 
@@ -29,12 +26,12 @@ export async function showProgressSettings(
   ctx: ExtensionCommandContext,
   options: ProgressSettingsUIOptions,
 ): Promise<"back" | "close" | "stale"> {
-  const { HorizontalRule, renderBoundedFrame } = await import("@narumitw/pi-tui-kit");
+  const { formatInteractionHints, HorizontalRule, renderBoundedFrame } = await import("@narumitw/pi-tui-kit");
   if (options.signal.aborted || !options.isCurrent()) return "stale";
   let queue = Promise.resolve();
   let reason: "back" | "close" | "stale" = "stale";
   try {
-    await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+    await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
       const rule = new HorizontalRule({ ruleStyle: (text) => theme.fg("border", text) });
       const controller = new AbortController();
       const signal = AbortSignal.any([options.signal, controller.signal]);
@@ -44,6 +41,9 @@ export async function showProgressSettings(
       let renderedWidth = 0;
       let contentHeight = 0;
       let mousePressed = false;
+      let itemLimitInput: Input | undefined;
+      let itemLimitPasting = false;
+      let focused = false;
       const current = () => !signal.aborted && options.isCurrent();
       const close = (nextReason: "back" | "close" | "stale") => {
         if (closing) return;
@@ -79,19 +79,97 @@ export async function showProgressSettings(
         {
           id: "maxVisibleItems",
           label: "Visible item limit",
-          description: "Set an item limit from 1 to 50, or none.",
+          description: "Enter a number from 1 to 50. Leave the field blank for no limit.",
           currentValue: formatValue(initial.maxVisibleItems),
           submenu(value, finish) {
-            const values = ["none", ...Array.from({ length: 50 }, (_, index) => String(index + 1))];
-            const list = new SelectList(
-              values.map((entry) => ({ value: entry, label: entry })),
-              8,
-              getSelectListTheme(),
-            );
-            list.setSelectedIndex(Math.max(0, values.indexOf(value)));
-            list.onSelect = (item) => finish(item.value);
-            list.onCancel = () => finish();
-            return list;
+            const input = new Input({
+              placeholder: "No limit",
+              placeholderStyle: (text) => theme.fg("muted", text),
+            });
+            const unsafePreview = new Input({
+              placeholder: "Invalid pasted text",
+              placeholderStyle: (text) => theme.fg("error", text),
+            });
+            input.setValue(value === "none" ? "" : value);
+            input.focused = focused;
+            itemLimitInput = input;
+            let error = "";
+            const unsafe = () => sanitizeTerminalDocument(input.getValue()) !== input.getValue();
+            const finishInput = (next?: string) => {
+              if (!current() || itemLimitInput !== input) return;
+              input.focused = false;
+              itemLimitInput = undefined;
+              itemLimitPasting = false;
+              mousePressed = false;
+              mouseRows.clear();
+              finish(next);
+            };
+            input.onSubmit = (draft) => {
+              if (!current() || itemLimitInput !== input) return;
+              const text = draft.trim();
+              const limit = Number(text);
+              if (
+                unsafe() ||
+                (text !== "" && (!/^\d+$/u.test(text) || !Number.isSafeInteger(limit) || limit < 1 || limit > 50))
+              ) {
+                error = "Enter a whole number from 1 to 50, or leave the field blank.";
+                ctx.ui.notify(error, "warning");
+                return;
+              }
+              finishInput(text === "" ? "none" : String(limit));
+            };
+            input.onEscape = () => finishInput();
+            const handleInput = (data: string): void => {
+              if (!current()) return;
+              if (!itemLimitPasting && matchesKey(data, Key.ctrl("c"))) {
+                close("close");
+                return;
+              }
+              if (itemLimitInput !== input) {
+                list.handleInput(data);
+                return;
+              }
+              if (data.includes("\u001b[200~")) itemLimitPasting = true;
+              const end = itemLimitPasting ? data.indexOf("\u001b[201~") : -1;
+              if (end >= 0 && end + 6 < data.length) {
+                input.handleInput(data.slice(0, end + 6));
+                itemLimitPasting = false;
+                handleInput(data.slice(end + 6));
+                return;
+              }
+              input.handleInput(data);
+              if (end >= 0) itemLimitPasting = false;
+            };
+            return {
+              render(width: number) {
+                // Keep unsafe pasted bytes in the draft for rejection, but never render their controls.
+                unsafePreview.focused = input.focused;
+                const hint = formatInteractionHints(keybindings, [
+                  {
+                    bindings: ["tui.input.submit"],
+                    excludeKeys: [...keybindings.getKeys("tui.select.cancel"), "ctrl+c"],
+                    label: "save",
+                  },
+                  { bindings: ["tui.select.cancel"], excludeKeys: ["ctrl+c"], label: "back" },
+                  { keys: ["ctrl+c"], label: "close" },
+                ]);
+                return [
+                  ...(unsafe() ? unsafePreview : input).render(width),
+                  ...new Text(theme.fg("muted", "Enter 1–50. Blank means no limit."), 0, 0).render(width),
+                  ...(error ? new Text(theme.fg("error", error), 0, 0).render(width) : []),
+                  ...new Text(theme.fg("muted", hint), 0, 0).render(width),
+                ];
+              },
+              invalidate() {
+                input.invalidate();
+                unsafePreview.invalidate();
+              },
+              handleInput,
+              handleMouse(event: TuiMouseEvent) {
+                // The safe placeholder is not the raw draft, so it has no mouse cursor target.
+                return unsafe() ? undefined : input.handleMouse(event);
+              },
+            };
           },
         },
         {
@@ -145,6 +223,13 @@ export async function showProgressSettings(
       options.signal.addEventListener("abort", cancelOwner, { once: true });
       if (!current()) cancelOwner();
       return {
+        get focused() {
+          return focused;
+        },
+        set focused(value: boolean) {
+          focused = value;
+          if (itemLimitInput) itemLimitInput.focused = value;
+        },
         render(width: number) {
           renderedWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
           const content = list.render(renderedWidth);
@@ -154,21 +239,27 @@ export async function showProgressSettings(
           // Blank rows stay blank so compact retention matches the original content.
           const tokens = new Map<string, number>();
           const layoutContent = content.map((line, index) => {
-            if (!stripVTControlCharacters(line).trim()) return line;
+            if (!stripVTControlCharacters(line).trim() && !(itemLimitInput && index === 0)) return line;
             const token = `content:${index}`;
             tokens.set(token, index);
             return token;
           });
           // SettingsList reserves three cells for ellipsis, hiding its arrow below four cells.
           // Item row positions do not depend on width, so use a wider render only to locate focus.
-          const focusContent = renderedWidth < 4 ? list.render(4) : content;
-          const focusedRow = focusContent.findIndex((line) => stripVTControlCharacters(line).startsWith("→"));
+          const focusContent = !itemLimitInput && renderedWidth < 4 ? list.render(4) : content;
+          const focusedRow = itemLimitInput
+            ? 0
+            : focusContent.findIndex((line) => stripVTControlCharacters(line).startsWith("→"));
           const terminalRows = Number.isFinite(tui.terminal.rows) ? Math.floor(tui.terminal.rows) : 24;
           const frame = renderBoundedFrame({
             width: Math.max(renderedWidth, `content:${content.length}`.length),
             maxRows: Math.max(1, terminalRows - 3),
             rule: rule.render(renderedWidth)[0] ?? "",
-            title: new Text(theme.fg("accent", theme.bold("Progress Settings")), 0, 0).render(renderedWidth),
+            title: new Text(
+              theme.fg("accent", theme.bold(itemLimitInput ? "Visible item limit" : "Progress Settings")),
+              0,
+              0,
+            ).render(renderedWidth),
             context: [theme.fg("muted", "Saved changes apply immediately.")],
             content: layoutContent,
             priorityRows: focusedRow < 0 ? [] : [focusedRow],
@@ -207,11 +298,14 @@ export async function showProgressSettings(
           if (closing || !current()) return;
           mousePressed = false;
           mouseRows.clear();
-          if (matchesKey(data, Key.ctrl("c"))) close("close");
+          if (!itemLimitPasting && matchesKey(data, Key.ctrl("c"))) close("close");
           else list.handleInput(data);
           tui.requestRender();
         },
         dispose() {
+          if (itemLimitInput) itemLimitInput.focused = false;
+          itemLimitInput = undefined;
+          itemLimitPasting = false;
           mouseRows.clear();
           mousePressed = false;
           controller.abort();

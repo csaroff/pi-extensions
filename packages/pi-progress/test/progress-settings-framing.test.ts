@@ -80,7 +80,7 @@ test("height-bounded Settings retains the focused row and omits rules only below
   tui.dispose();
 });
 
-test("the item-limit submenu uses the same frame and retains its selected choice at low heights", async () => {
+test("the item-limit input uses the same frame and retains its draft at low heights", async () => {
   const current = createContext();
   const tui = createTuiHarness({ width: 80, rows: 24 });
   Object.assign(current.ctx.ui, { custom: tui.custom });
@@ -88,16 +88,16 @@ test("the item-limit submenu uses the same frame and retains its selected choice
   await tui.waitForOpen();
   for (let index = 0; index < 3; index++) tui.press("tui.select.down");
   tui.press("tui.select.confirm");
-  tui.press("tui.select.up");
+  tui.type("50");
   const normal = tui.render().map(stripVTControlCharacters);
   assert.equal(normal[0], "─".repeat(80));
   assert.equal(normal.at(-1), "─".repeat(80));
-  assert.ok(normal.some((line) => line.startsWith("→ 50")));
+  assert.ok(normal.some((line) => line.startsWith("> 50")));
   for (const rows of [4, 7, 8]) {
     tui.resize({ rows, width: 20 });
     const lines = tui.render().map(stripVTControlCharacters);
     assert.ok(lines.length <= Math.max(1, rows - 3));
-    assert.ok(lines.some((line) => line.startsWith("→ 50")));
+    assert.ok(lines.some((line) => line.startsWith("> 50")));
     for (const line of lines) assert.ok(visibleWidth(line) <= 20);
   }
   tui.press("ctrl+c");

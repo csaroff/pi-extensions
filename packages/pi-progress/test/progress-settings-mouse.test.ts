@@ -80,46 +80,42 @@ test("header, borders, descriptions, hints, hover, and secondary buttons do not 
   assert.equal(screen.save.mock.calls.length, 0);
 });
 
-test("wheel input navigates Settings and the item-limit submenu; clicks save the shown choice", async (t) => {
+test("wheel input navigates Settings; the item limit opens a native input", async (t) => {
   const screen = await openSettings(t);
   screen.tui.mouse({ type: "wheel", x: 1, y: screen.row("Show widget"), wheelDelta: 1 });
   assert.ok(screen.frame().some((line) => line.startsWith("→ Display mode")));
   assert.equal(screen.save.mock.calls.length, 0);
   screen.tui.mouse({ type: "click", x: 1, y: screen.row("Visible item limit") });
-  const none = screen.row("none");
-  screen.tui.mouse({ type: "wheel", x: 1, y: none, wheelDelta: 1 });
-  assert.ok(screen.frame().some((line) => line.startsWith("→ 1")));
-  screen.tui.mouse({ type: "click", x: 1, y: screen.row("→ 1") });
-  await vi.waitFor(() => assert.equal(screen.settings().maxVisibleItems, 1));
-  assert.deepEqual(screen.save.mock.calls[0]?.[0], { maxVisibleItems: 1 });
+  screen.tui.mouse({ type: "wheel", x: 1, y: screen.row("No limit"), wheelDelta: 1 });
+  assert.equal(screen.save.mock.calls.length, 0);
+  screen.tui.type("25");
+  screen.tui.press("tui.input.submit");
+  await vi.waitFor(() => assert.equal(screen.settings().maxVisibleItems, 25));
+  assert.deepEqual(screen.save.mock.calls[0]?.[0], { maxVisibleItems: 25 });
 });
 
-test("submenu press keeps its target after native scrolling; an outside click clears a stale press", async (t) => {
+test("input mouse presses move the cursor and passive rows do not edit the draft", async (t) => {
   const screen = await openSettings(t);
   screen.tui.mouse({ type: "click", x: 1, y: screen.row("Visible item limit") });
-  const six = screen.frame().findIndex((line) => /^ {2}6$/u.test(line));
-  assert.ok(six >= 0);
-  screen.tui.mouse({ type: "press", x: 1, y: six });
-  screen.tui.mouse({ type: "click", x: 1, y: six });
-  await vi.waitFor(() => assert.equal(screen.settings().maxVisibleItems, 6));
-  screen.tui.mouse({ type: "click", x: 1, y: screen.row("Visible item limit") });
-  const eight = screen.frame().findIndex((line) => /^ {2}8$/u.test(line));
-  assert.ok(eight >= 0);
-  screen.tui.mouse({ type: "press", x: 1, y: eight });
-  screen.tui.mouse({ type: "click", x: 1, y: 0 });
-  const five = screen.frame().findIndex((line) => /^ {2}5$/u.test(line));
-  assert.ok(five >= 0);
-  screen.tui.mouse({ type: "click", x: 1, y: five });
-  await vi.waitFor(() => assert.equal(screen.settings().maxVisibleItems, 5));
+  screen.tui.type("15");
+  screen.tui.mouse({ type: "press", x: 3, y: screen.row("> 15") });
+  screen.tui.send("\u007f");
+  screen.tui.type("2");
+  screen.tui.mouse({ type: "click", x: 1, y: screen.row("Blank means") });
+  screen.tui.press("tui.input.submit");
+  await vi.waitFor(() => assert.equal(screen.settings().maxVisibleItems, 25));
 });
 
-test("submenu clicks use the latest compact frame after resize and invalidation", async (t) => {
+test("input cursor presses use the latest compact frame after resize and invalidation", async (t) => {
   const screen = await openSettings(t);
   screen.tui.mouse({ type: "click", x: 1, y: screen.row("Visible item limit") });
-  screen.tui.press("tui.select.up");
+  screen.tui.type("50");
   screen.tui.resize({ rows: 4, width: 20 });
   screen.tui.invalidate();
-  assert.equal(screen.frame()[0], "→ 50");
-  screen.tui.mouse({ type: "click", x: 1, y: 0 });
-  await vi.waitFor(() => assert.equal(screen.settings().maxVisibleItems, 50));
+  assert.ok(screen.frame()[0]?.startsWith("> 50"));
+  screen.tui.mouse({ type: "press", x: 3, y: 0 });
+  screen.tui.send("\u007f");
+  screen.tui.type("4");
+  screen.tui.press("tui.input.submit");
+  await vi.waitFor(() => assert.equal(screen.settings().maxVisibleItems, 40));
 });

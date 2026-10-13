@@ -55,7 +55,7 @@ test("changes all five settings in one screen with bounded rendering", async () 
   await vi.waitFor(() => assert.equal(settings.showCompleted, false));
   screen.handleInput("tui.select.down");
   screen.handleInput("\r");
-  screen.handleInput("tui.select.down");
+  screen.handleInput("1");
   screen.handleInput("\r");
   await vi.waitFor(() => assert.equal(settings.maxVisibleItems, 1));
   screen.handleInput("tui.select.down");
