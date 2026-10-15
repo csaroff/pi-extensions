@@ -59,8 +59,26 @@ export type ProviderAccountsData = {
   [key: string]: unknown;
   /** Default for sessions without a saved provider selection; not the current session account. */
   active?: string;
+  /** Start each new session on a random saved account instead of `active`. */
+  randomDefault?: boolean;
   accounts: Record<string, StoredCredential>;
 };
+
+/**
+ * The account a new session starts with. A random default keeps a fork or clone on its parent's
+ * account so the conversation does not move; otherwise it picks any saved account.
+ */
+export function startupAccount(
+  state: ProviderAccountsData | undefined,
+  inherited: string | null | undefined,
+  random: () => number,
+): string | null {
+  if (!state) return null;
+  if (state.randomDefault !== true) return state.active ?? null;
+  const names = Object.keys(state.accounts).sort();
+  if (inherited && names.includes(inherited)) return inherited;
+  return names[Math.floor(random() * names.length)] ?? null;
+}
 
 export type AccountsData = {
   [key: string]: unknown;

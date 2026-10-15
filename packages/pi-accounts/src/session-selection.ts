@@ -40,6 +40,23 @@ export function restoreAccountSelections(
   return { status: "missing" };
 }
 
+/** The latest valid selection from any session, such as one copied from a fork's parent. */
+export function restoreInheritedAccountSelections(
+  entries: readonly SessionEntry[],
+): ProviderAccountSelections | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry?.type !== "custom" || entry.customType !== ACCOUNT_SELECTION_ENTRY_TYPE || !isRecord(entry.data))
+      continue;
+    try {
+      return parseSelectionEntryData(entry.data).providers;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 export function createAccountSelectionEntryData(
   sessionId: string,
   selections: ProviderAccountSelections,

@@ -11,6 +11,7 @@ import {
   normalizeStoredCredential,
   parseAccountName,
   type StoredCredential,
+  startupAccount,
 } from "./account-store.js";
 import { registerAccountsProtocol } from "./accounts-protocol.js";
 import {
@@ -38,6 +39,7 @@ import {
   createAccountSelectionEntryData,
   type ProviderAccountSelections,
   restoreAccountSelections,
+  restoreInheritedAccountSelections,
   setAccountSelection,
 } from "./session-selection.js";
 
@@ -64,6 +66,7 @@ export type AccountsDependencies = {
   store?: AccountStore;
   providers?: readonly AccountProviderAdapter[];
   closeCodexWebSockets?: (sessionId?: string) => unknown | Promise<unknown>;
+  random?: () => number;
 };
 
 type SessionEntryWriter = {
@@ -111,6 +114,7 @@ export type PersistSelection = (
 
 export default function accountsExtension(pi: ExtensionAPI, dependencies: AccountsDependencies = {}): void {
   const store = dependencies.store ?? new AccountStore();
+  const random = dependencies.random ?? Math.random;
   let migrationNotice = dependencies.store ? undefined : consumeMigrationNotice();
   const providers = [
     ...(dependencies.providers ??
@@ -159,8 +163,10 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
     try {
       const data = await store.readAsync(owner.signal);
       if (!isOwnerCurrent(owner)) return;
+      const inherited = restoreInheritedAccountSelections(ctx.sessionManager.getEntries());
       for (const provider of missingProviders) {
-        selections = setAccountSelection(selections, provider.id, data.providers[provider.id]?.active ?? null);
+        const account = startupAccount(data.providers[provider.id], inherited?.[provider.id], random);
+        selections = setAccountSelection(selections, provider.id, account);
       }
       owner.sessionManager.appendCustomEntry(
         ACCOUNT_SELECTION_ENTRY_TYPE,

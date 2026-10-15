@@ -17,7 +17,7 @@ Each Pi session keeps its own selection for every provider, and choosing `defaul
 - Manages named OAuth accounts for every built-in `/login` provider: Anthropic, GitHub Copilot, Kimi For Coding, Meta, OpenAI, OpenAI Codex (legacy), OpenRouter, Radius, and xAI.
 - Saves named API key accounts for the same providers except OAuth-only OpenAI Codex (legacy).
 - Selects an account—or Pi's default login—independently for each provider and Pi session, with an optional `PI_ACCOUNT` override for scripts and concurrent Pi processes.
-- Saves a default account for each provider to use in new sessions without changing existing sessions.
+- Saves a default account for each provider to use in new sessions without changing existing sessions, or picks a random saved account per new session.
 - Optionally rotates a session to the provider's next saved account when a request hits a usage or rate limit, then retries it.
 - Restores session selections after resume or reload while allowing concurrent sessions to use different accounts.
 - Applies provider-specific credentials, endpoints, headers, and model availability through Pi's built-in providers.
@@ -100,7 +100,7 @@ Removal returns the current session's affected selection to `default`, but other
 
 ## ⚙️ Settings
 
-Open `/accounts` → **Set default account**, choose a provider, then select a saved account or **Pi built-in login**.
+Open `/accounts` → **Set default account**, choose a provider, then select a saved account, **Any account (random)**, or **Pi built-in login**.
 The picker shows the saved default and saves your selection immediately; leaving it before selecting changes nothing.
 
 Defaults are user-wide settings in `<getAgentDir()>/pi-accounts.json` (normally `~/.pi/agent/pi-accounts.json`); project overrides are not supported.
@@ -109,6 +109,8 @@ An absent or `null` value means Pi's built-in login; named values must match a s
 The menu clears `active` when you choose **Pi built-in login** or remove the configured default account. Editing a saved default while `PI_ACCOUNT` is set does not change that process's effective selection.
 
 New sessions, including `/new`, forks, and clones, snapshot these defaults.
+**Any account (random)** stores `providers.<provider-id>.randomDefault: true` instead of `active`: each new session starts on a randomly chosen saved account, which spreads sessions across accounts without quota data, while a fork or clone keeps its parent's account so an ongoing conversation does not move.
+Releases without this option ignore the field and start new sessions on Pi's built-in login.
 A session's saved selection takes precedence on restart, resume, and `/reload`; changing a default never switches that session or other existing sessions.
 Login and **Switch … account** still change only the current session, not the startup default.
 

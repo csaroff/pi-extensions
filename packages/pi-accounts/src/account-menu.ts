@@ -9,6 +9,7 @@ const LOGIN_ACTION = "Login new account";
 const REMOVE_ACTION = "Remove account";
 const SWITCH_PROVIDER_ACTION = "Switch provider account";
 const SWITCH_ANOTHER_PROVIDER_ACTION = "Switch another provider’s account";
+const RANDOM_DEFAULT_LABEL = "Any account (random)";
 
 type AccountMenuSession = {
   selections: ProviderAccountSelections;
@@ -39,6 +40,7 @@ type ProviderMenuState = {
   adapter: AccountProviderAdapter;
   active: string | undefined;
   defaultAccount: string | undefined;
+  randomDefault: boolean;
   selectionInvalid: boolean;
   accounts: Record<string, StoredCredential>;
 };
@@ -196,7 +198,7 @@ export async function showAccountsMenu(
         items: sortedProviderStates(state.states).map((provider) => ({
           id: provider.id,
           label: provider.adapter.displayName,
-          description: `Default: ${provider.defaultAccount ?? "Pi built-in login"}`,
+          description: `Default: ${formatDefault(provider)}`,
           action: "default-provider",
         })),
         hint: "back",
@@ -207,7 +209,7 @@ export async function showAccountsMenu(
           kind: "actions",
           title: `Default ${provider?.adapter.displayName ?? "provider"} account`,
           lines: [
-            `Saved default: ${provider?.defaultAccount ?? "Pi built-in login"}`,
+            `Saved default: ${provider ? formatDefault(provider) : "Pi built-in login"}`,
             "Applies to new sessions only. Selecting an account saves immediately.",
           ],
           items: provider
@@ -216,13 +218,20 @@ export async function showAccountsMenu(
                   id: "pi-login",
                   label: "Pi built-in login",
                   action: "default-account" as const,
-                  disabled: provider.defaultAccount === undefined,
+                  disabled: provider.defaultAccount === undefined && !provider.randomDefault,
+                },
+                {
+                  id: "random",
+                  label: RANDOM_DEFAULT_LABEL,
+                  description: "Each new session picks a saved account; forks keep their parent's",
+                  action: "default-account" as const,
+                  disabled: provider.randomDefault || accountNames(provider).length === 0,
                 },
                 ...accountNames(provider).map((name) => ({
                   id: accountItemId(name),
                   label: name,
                   action: "default-account" as const,
-                  disabled: name === provider.defaultAccount,
+                  disabled: !provider.randomDefault && name === provider.defaultAccount,
                 })),
               ]
             : [],
@@ -278,13 +287,18 @@ export async function showAccountsMenu(
         try {
           const saved = await store.updateProvider(providerId, (state) => {
             if (!isCurrent()) throw new DOMException("Menu closed", "AbortError");
+            const { randomDefault: _previous, ...rest } = state;
+            if (itemId === "random") {
+              if (Object.keys(state.accounts).length === 0) throw new Error("No saved accounts");
+              return { ...rest, active: undefined, randomDefault: true };
+            }
             const name = Object.keys(state.accounts).find((name) => accountItemId(name) === itemId);
             if (itemId !== "pi-login" && !name) throw new Error("Account no longer exists");
-            return { ...state, active: itemId === "pi-login" ? undefined : name };
+            return { ...rest, active: itemId === "pi-login" ? undefined : name };
           });
           if (!isCurrent()) return { kind: "close" };
           ctx.ui.notify(
-            `Default ${requireAdapter(adapters, providerId).displayName} account for new sessions: ${saved.active ?? "Pi built-in login"}. This session is unchanged.`,
+            `Default ${requireAdapter(adapters, providerId).displayName} account for new sessions: ${saved.randomDefault ? RANDOM_DEFAULT_LABEL : (saved.active ?? "Pi built-in login")}. This session is unchanged.`,
             "info",
           );
           return { kind: "close" };
@@ -405,6 +419,7 @@ async function readProviderMenuStates(
       adapter: requireAdapter(adapters, id),
       active,
       defaultAccount: state.active,
+      randomDefault: state.randomDefault === true,
       selectionInvalid:
         (session.environmentAccount === undefined && session.error !== undefined) ||
         session.environmentError !== undefined ||
@@ -496,6 +511,10 @@ function buildAccountMainItems(
     },
     ...(hasAnyStoredAccount ? [{ id: "remove", label: REMOVE_ACTION, action: "remove-route" as const }] : []),
   ];
+}
+
+function formatDefault(provider: ProviderMenuState): string {
+  return provider.randomDefault ? RANDOM_DEFAULT_LABEL : (provider.defaultAccount ?? "Pi built-in login");
 }
 
 function accountItemId(accountName: string): string {

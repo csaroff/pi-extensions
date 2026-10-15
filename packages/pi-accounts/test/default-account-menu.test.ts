@@ -123,7 +123,8 @@ for (const finish of ["save", "cancel", "dispose", "shutdown"] as const) {
               return undefined;
             } else if (finish === "shutdown") controller.abort();
             else {
-              // Pi login, disabled alpha, beta.
+              // Pi login, Any account (random), disabled alpha, beta.
+              harness.handleInput("j");
               harness.handleInput("j");
               harness.handleInput("j");
             }
