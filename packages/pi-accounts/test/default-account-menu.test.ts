@@ -148,3 +148,19 @@ for (const finish of ["save", "cancel", "dispose", "shutdown"] as const) {
     );
   });
 }
+
+test("rotation toggle saves the user-wide setting and preserves accounts", async () => {
+  const { store, owner } = await setup();
+  for (const expected of [true, false]) {
+    const choices = [expected ? "Automatic rotation: off" : "Automatic rotation: on"];
+    const { ctx, notifications } = createMockContext({
+      mode: "rpc",
+      hasUI: true,
+      select: async () => choices.shift(),
+    });
+    await showAccountsMenu(ctx, store, adapters, { selections: { anthropic: "alpha" } }, handlers, owner);
+    assert.deepEqual(store.read().rotation, { enabled: expected });
+    assert.equal(store.read().providers.anthropic?.active, "alpha");
+    assert.match(notifications.at(-1)?.message ?? "", expected ? /rotation on/ : /rotation off/);
+  }
+});

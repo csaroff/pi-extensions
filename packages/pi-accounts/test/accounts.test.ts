@@ -529,6 +529,7 @@ test("accounts registers only the interactive /accounts command and lifecycle ho
 
   assert.deepEqual([...mock.commands.keys()].sort(), ["accounts"]);
   assert.deepEqual([...mock.events.keys()].sort(), [
+    "agent_before_settle",
     "before_agent_start",
     "model_select",
     "session_shutdown",
@@ -573,7 +574,7 @@ test("accounts empty state offers login and defaults and ignores command argumen
   await mock.commands.get("accounts")?.handler("anything ignored", ctx);
 
   assert.match(selectCalls[0]?.title ?? "", /No saved accounts yet/);
-  assert.deepEqual(selectCalls[0]?.options, ["Login new account", "Set default account"]);
+  assert.deepEqual(selectCalls[0]?.options, ["Login new account", "Set default account", "Automatic rotation: off"]);
 });
 
 test("accounts menu summarizes all supported providers and prioritizes current provider switch", async () => {
@@ -627,6 +628,7 @@ test("accounts menu summarizes all supported providers and prioritizes current p
     "Remove account",
     "Switch another provider’s account",
     "Set default account",
+    "Automatic rotation: off",
   ]);
 });
 
@@ -654,6 +656,7 @@ test("accounts menu prioritizes login when the current provider has no saved acc
     "Switch another provider’s account",
     "Remove account",
     "Set default account",
+    "Automatic rotation: off",
   ]);
 });
 
@@ -688,6 +691,7 @@ test("accounts recovery routes to the invalid provider without dead current-prov
     "Login new account",
     "Switch another provider’s account",
     "Set default account",
+    "Automatic rotation: off",
   ]);
 });
 
@@ -718,6 +722,7 @@ test("accounts menu uses generic provider switch for unsupported current models"
     "Switch provider account",
     "Remove account",
     "Set default account",
+    "Automatic rotation: off",
   ]);
 });
 

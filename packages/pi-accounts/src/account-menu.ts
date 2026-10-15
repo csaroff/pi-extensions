@@ -1,5 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
+import { readRotationSettings, setRotationEnabled } from "./account-rotation.js";
 import { type AccountStore, defineOwnMap, getOwnCredential, type StoredCredential } from "./account-store.js";
 import { type AccountProviderAdapter, type AccountProviderId, SUPPORTED_PROVIDER_IDS } from "./oauth.js";
 import type { ProviderAccountSelections } from "./session-selection.js";
@@ -62,6 +63,7 @@ export async function showAccountsMenu(
     states: Map<AccountProviderId, ProviderMenuState>;
     currentProviderId: AccountProviderId | undefined;
     hasAnyStoredAccount: boolean;
+    rotationEnabled: boolean;
     selectionError?: string;
   };
   type Screen =
@@ -84,7 +86,8 @@ export async function showAccountsMenu(
     | "switch-provider"
     | "switch-account"
     | "remove-route"
-    | "remove-account";
+    | "remove-account"
+    | "rotation-toggle";
   const menu = defineMenu<State, Screen, Action, ExtensionCommandContext>({
     start: "main",
     screens: {
@@ -127,6 +130,12 @@ export async function showAccountsMenu(
               label: "Set default account",
               description: "For new sessions only; keeps this session unchanged",
               action: "default-route",
+            },
+            {
+              id: "rotation",
+              label: `Automatic rotation: ${state.rotationEnabled ? "on" : "off"}`,
+              description: "On a usage or rate limit, switch to the provider's next saved account and retry",
+              action: "rotation-toggle",
             },
           ],
           hint: "close",
@@ -233,6 +242,29 @@ export async function showAccountsMenu(
     },
     actions: {
       "default-route": async () => ({ kind: "to", screen: "default-providers" }),
+      "rotation-toggle": async ({ signal }) => {
+        const isCurrent = () => owner.isCurrent() && !signal.aborted;
+        try {
+          let enabled = false;
+          await store.update((data) => {
+            if (!isCurrent()) throw new DOMException("Menu closed", "AbortError");
+            enabled = !readRotationSettings(data).enabled;
+            return setRotationEnabled(data, enabled);
+          });
+          if (!isCurrent()) return { kind: "close" };
+          ctx.ui.notify(
+            enabled
+              ? "Automatic rotation on: a usage or rate limit switches the session to the provider's next saved account and retries."
+              : "Automatic rotation off.",
+            "info",
+          );
+          return { kind: "close" };
+        } catch {
+          if (!isCurrent()) return { kind: "close" };
+          ctx.ui.notify("Could not save the rotation setting. Check account storage and try again.", "error");
+          return { kind: "rejected" };
+        }
+      },
       "default-provider": async ({ itemId }) => {
         if (!isAccountProviderId(itemId)) return { kind: "rejected" };
         selectedProviderId = itemId;
@@ -334,12 +366,13 @@ export async function showAccountsMenu(
   });
   await runMenu(ctx, menu, {
     getState: async () => {
-      const states = await readProviderMenuStates(store, adapters, session);
+      const [states, data] = await Promise.all([readProviderMenuStates(store, adapters, session), store.readAsync()]);
       const missingSelection = [...states.values()].some((state) => state.selectionInvalid);
       return {
         states,
         currentProviderId: toProviderId(ctx.model?.provider),
         hasAnyStoredAccount: [...states.values()].some((state) => accountNames(state).length > 0),
+        rotationEnabled: readRotationSettings(data).enabled,
         selectionError:
           (session.environmentAccount !== undefined && session.error
             ? "The saved session selection is unavailable, but PI_ACCOUNT remains effective. Unset it and restart Pi to repair via /accounts."

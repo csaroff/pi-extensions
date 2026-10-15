@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createAccountActivation } from "./account-activation.js";
+import { registerAccountRotation } from "./account-rotation.js";
 import {
   AccountStore,
   consumeMigrationNotice,
@@ -554,6 +555,16 @@ export default function accountsExtension(pi: ExtensionAPI, dependencies: Accoun
       }),
     );
     setStatus(ctx, undefined);
+  });
+
+  // Registered last so the session owner and its auth sync run before rotation reads them.
+  registerAccountRotation(pi, {
+    store,
+    adapters,
+    getOwner: (sessionManager) => sessionOwners.get(sessionManager),
+    isOwnerCurrent,
+    persistSelection,
+    syncProvider,
   });
 }
 

@@ -18,6 +18,7 @@ Each Pi session keeps its own selection for every provider, and choosing `defaul
 - Saves named API key accounts for the same providers except OAuth-only OpenAI Codex (legacy).
 - Selects an account—or Pi's default login—independently for each provider and Pi session, with an optional `PI_ACCOUNT` override for scripts and concurrent Pi processes.
 - Saves a default account for each provider to use in new sessions without changing existing sessions.
+- Optionally rotates a session to the provider's next saved account when a request hits a usage or rate limit, then retries it.
 - Restores session selections after resume or reload while allowing concurrent sessions to use different accounts.
 - Applies provider-specific credentials, endpoints, headers, and model availability through Pi's built-in providers.
 - Refreshes rotating credentials and verifies the effective authentication before reporting success.
@@ -85,7 +86,7 @@ The first prompt, model switch, or `/accounts` operation that needs a provider w
 
 ## 💬 Commands
 
-Run `/accounts` to log in with OAuth, add an API key account, switch provider accounts for the current Pi session, set defaults for new sessions, or remove saved accounts in TUI or RPC mode.
+Run `/accounts` to log in with OAuth, add an API key account, switch provider accounts for the current Pi session, set defaults for new sessions, turn automatic rotation on or off, or remove saved accounts in TUI or RPC mode.
 Arguments are ignored for compatibility; print and JSON modes provide no account-manager output.
 Login uses Pi's native OAuth flow, including device codes and cancellation, with equivalent RPC dialogs.
 
@@ -121,6 +122,19 @@ If a saved session selection is invalid or cannot be written, a valid `PI_ACCOUN
 
 Sessions predating session-local selection support snapshot the current default once because their historical choice cannot be inferred.
 If a manually configured default names a missing account, affected sessions fail closed until you choose an available account or Pi's built-in login.
+
+### Automatic rotation
+
+Open `/accounts` → **Automatic rotation** to turn it on or off. It is off by default and stored as `rotation.enabled` in `pi-accounts.json`.
+
+When it is on and a request made with a named account fails with a usage, quota, or rate limit, the session switches to the provider's next saved account (in name order) and retries the same request.
+Pi's own retries run first, so rotation only acts once Pi gives up; usage limits such as an exhausted ChatGPT subscription are not retried by Pi and rotate immediately.
+The failed reply stays in the session history but is hidden from the model, so the retry answers the original prompt.
+Like **Switch … account**, rotation changes only the current session, never the saved default.
+
+Rotation stays within one provider and one prompt: each account is tried at most once per prompt, and a failed account is skipped for 15 minutes by later prompts in the same Pi process.
+It does not act on authentication failures, which still fail closed, on provider-wide errors such as overload, on Pi's built-in login, or while `PI_ACCOUNT` is set.
+If switching fails authentication, the session fails closed as with a manual switch.
 
 Saves preserve unknown settings fields and use the credential store's cross-process lock and private atomic replacement.
 Within one store, asynchronous reads follow queued writes; failed writes leave the queue usable.
@@ -244,7 +258,8 @@ It is excluded from active workspace checks, version bumps, and publishing.
 
 - Named API key profiles cover only the supported login providers, not every API-key-only provider in Pi.
 - Named profiles store literal keys locally; continue using Pi's `auth.json`, environment variables, or `!command` secret-manager resolution for externally managed secrets.
-- It does not rotate accounts automatically, evade quotas, or report usage.
+- Rotation reacts to a failed request; it does not predict or report quota, balance load across accounts, or fall back to another provider.
+- Rotation cooldowns are kept in memory, so separate Pi processes can each spend one request on an exhausted account.
 - It does not support arbitrary custom providers.
 - Live OAuth login and model requests depend on provider service availability and account entitlement.
 - Sessions created before session-local selection support cannot recover a historical per-session choice; see [Settings](#-settings).
@@ -255,7 +270,8 @@ It is excluded from active workspace checks, version bumps, and publishing.
 packages/pi-accounts/
 ├── src/                               # Authoritative implementation and helpers
 │   ├── index.ts                       # Thin Pi entrypoint
-│   └── accounts.ts                    # Account activation and session lifecycle
+│   ├── accounts.ts                    # Account activation and session lifecycle
+│   └── account-rotation.ts            # Opt-in rotation on usage and rate limits
 ├── dist/                              # Generated Jiti runtime
 ├── scripts/build-runtime.mjs          # Runtime builder
 └── test/                              # Behavior and lifecycle coverage

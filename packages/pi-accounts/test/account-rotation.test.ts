@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { beforeAll, test } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
+import { isRotatableFailure, pickNextAccount } from "../src/account-rotation.js";
 import accountsExtension, { AccountStore } from "../src/accounts.js";
 import type { AccountProviderAdapter } from "../src/oauth.js";
 import { ACCOUNT_SELECTION_ENTRY_TYPE } from "../src/session-selection.js";
@@ -160,4 +161,105 @@ test("a usage-limited account hands the same request to the next saved account",
   );
 
   await emit(mock, "session_shutdown", {}, ctx);
+});
+
+async function rotationFixture(options: { rotation?: boolean; active?: string; accounts?: string[] } = {}) {
+  const store = new AccountStore(new InMemoryAccountStorageBackend());
+  await store.update((data) => ({
+    ...data,
+    ...(options.rotation === false ? {} : { rotation: { enabled: true } }),
+    providers: {
+      openai: {
+        ...(options.active === undefined ? { active: "work" } : options.active ? { active: options.active } : {}),
+        accounts: Object.fromEntries(
+          (options.accounts ?? ["work", "personal"]).map((name) => [name, credential(name)]),
+        ),
+      },
+    },
+  }));
+  const mock = createMockPi();
+  accountsExtension(mock.pi, { store, providers: [openai] });
+  const registry = new ModelRegistry(
+    await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null, refreshOnCreate: false }),
+  );
+  const manager = SessionManager.inMemory(process.cwd());
+  const { ctx, notifications } = createMockContext({
+    sessionManager: manager,
+    modelRegistry: registry,
+    model: { provider: "openai", id: "gpt-4o" },
+  });
+  await emit(mock, "session_start", {}, ctx);
+  await emit(mock, "before_agent_start", {}, ctx);
+  // Each request records which account sent it, then fails with the given provider error.
+  const failRequest = async (errorMessage: string) => {
+    await emit(mock, "turn_start", { turnIndex: 0 }, ctx);
+    manager.appendMessage(failedReply(errorMessage));
+    return emit(mock, "agent_before_settle", settleEvent(manager), ctx);
+  };
+  const apiKey = () => registry.getApiKeyForProvider("openai");
+  return { store, mock, ctx, manager, notifications, failRequest, apiKey };
+}
+
+test("rotation stops once every saved account has failed the same prompt", async () => {
+  const { failRequest, apiKey, notifications } = await rotationFixture();
+  const first = (await failRequest("429 Too Many Requests: rate limit reached")) as { continue?: boolean };
+  assert.equal(first?.continue, true);
+  assert.equal(await apiKey(), "access-personal");
+
+  // "work" already failed this prompt, so the second failure settles instead of looping back.
+  assert.equal(await failRequest("insufficient_quota"), undefined);
+  assert.equal(await apiKey(), "access-personal");
+  assert.ok(notifications.some(({ message, level }) => level === "warning" && message.includes("no other saved")));
+});
+
+for (const scenario of [
+  { name: "rotation is off by default", fixture: { rotation: false }, error: "usage_limit_exceeded" },
+  { name: "auth failures stay fail-closed", fixture: {}, error: "401 Unauthorized: token has been invalidated" },
+  { name: "provider-wide overload would fail on any account", fixture: {}, error: "529 overloaded" },
+  { name: "Pi's built-in login is not in the saved pool", fixture: { active: "" }, error: "usage_limit_exceeded" },
+]) {
+  test(`no rotation when ${scenario.name}`, async () => {
+    const { failRequest, apiKey, manager } = await rotationFixture(scenario.fixture);
+    const before = await apiKey();
+    assert.equal(await failRequest(scenario.error), undefined);
+    assert.equal(await apiKey(), before);
+    assert.notEqual(sessionSelection(manager, "openai"), "personal");
+  });
+}
+
+test("no rotation when PI_ACCOUNT pins the process to one account", async () => {
+  process.env.PI_ACCOUNT = "work";
+  const { failRequest, apiKey } = await rotationFixture();
+  assert.equal(await apiKey(), "access-work");
+  assert.equal(await failRequest("usage_limit_exceeded"), undefined);
+  assert.equal(await apiKey(), "access-work");
+});
+
+test("pickNextAccount walks saved accounts in order, skipping tried and cooling accounts", () => {
+  const names = ["c", "a", "b"];
+  const pick = (failed: string, attempted: string[] = [], cooling: Record<string, number> = {}) =>
+    pickNextAccount({ names, failed, attempted: new Set(attempted), coolingUntil: (name) => cooling[name], now: 100 });
+  assert.equal(pick("a"), "b");
+  assert.equal(pick("c"), "a", "wraps around after the last account");
+  assert.equal(pick("a", ["b"]), "c");
+  assert.equal(pick("a", [], { b: 200 }), "c", "skips an account still cooling down");
+  assert.equal(pick("a", [], { b: 50 }), "b", "an expired cooldown is available again");
+  assert.equal(pick("a", ["b", "c"]), undefined);
+});
+
+test("isRotatableFailure matches limit errors only", () => {
+  const rotatable = (errorMessage: string) => isRotatableFailure({ stopReason: "error", errorMessage });
+  for (const message of [
+    "subscription_sharing_usage_limit_exceeded",
+    "insufficient_quota",
+    "Quota exceeded for this billing period",
+    "429 Too Many Requests",
+    "rate_limit_error: Number of request tokens has exceeded your per-minute rate limit",
+  ]) {
+    assert.equal(rotatable(message), true, message);
+  }
+  for (const message of ["401 Unauthorized", "529 overloaded", "500 internal server error", "fetch failed"]) {
+    assert.equal(rotatable(message), false, message);
+  }
+  assert.equal(isRotatableFailure({ stopReason: "aborted", errorMessage: "usage_limit_exceeded" }), false);
 });
