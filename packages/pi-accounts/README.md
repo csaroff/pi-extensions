@@ -127,14 +127,14 @@ If a manually configured default names a missing account, affected sessions fail
 
 ### Automatic rotation
 
-Open `/accounts` → **Automatic rotation** to turn it on or off. It is off by default and stored as `rotation.enabled` in `pi-accounts.json`.
+Rotation is on by default. Open `/accounts` → **Automatic rotation** to turn it off or back on; turning it off stores `rotation.enabled: false` in `pi-accounts.json`.
 
 When it is on and a request made with a named account fails with a usage, quota, or rate limit, the session switches to the provider's next saved account (in name order) and retries the same request.
 Pi's own retries run first, so rotation only acts once Pi gives up; usage limits such as an exhausted ChatGPT subscription are not retried by Pi and rotate immediately.
 The failed reply stays in the session history but is hidden from the model, so the retry answers the original prompt.
 Like **Switch … account**, rotation changes only the current session, never the saved default.
 
-Rotation stays within one provider and one prompt: each account is tried at most once per prompt, and a failed account is skipped for 15 minutes by later prompts in the same Pi process.
+Rotation stays within one provider and one prompt: each account is tried at most once per prompt, and a failed account is skipped for one minute by later prompts in the same Pi process.
 It does not act on authentication failures, which still fail closed, on provider-wide errors such as overload, on Pi's built-in login, or while `PI_ACCOUNT` is set.
 If switching fails authentication, the session fails closed as with a manual switch.
 

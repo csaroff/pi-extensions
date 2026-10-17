@@ -4,9 +4,9 @@ import type { AccountStore, AccountsData } from "./account-store.js";
 import type { PersistSelection, SessionSelectionOwner, SyncProvider } from "./accounts.js";
 import type { AccountProviderAdapter, AccountProviderId } from "./oauth.js";
 
-// A spent account usually recovers after hours, but a cooldown only spares later requests in this
-// process; the per-prompt attempt list is what keeps one prompt from looping.
-export const ROTATION_COOLDOWN_MS = 15 * 60_000;
+// Long enough to ride out a short rate-limit burst; a spent usage limit just costs one fast failed
+// request per minute. The per-prompt attempt list, not the cooldown, keeps one prompt from looping.
+export const ROTATION_COOLDOWN_MS = 60_000;
 
 // Errors another account of the same provider can plausibly avoid: quota, usage, and rate limits.
 // Auth failures are excluded because pi-accounts fails a broken credential closed by design, and
@@ -15,10 +15,11 @@ const LIMIT_ERROR_PATTERN = /usage.?limit|quota|rate.?limit|too many requests|\b
 
 export type RotationSettings = { enabled: boolean };
 
+/** On unless the user turned it off. */
 export function readRotationSettings(data: AccountsData): RotationSettings {
   const rotation = data.rotation;
   return {
-    enabled: !!rotation && typeof rotation === "object" && (rotation as { enabled?: unknown }).enabled === true,
+    enabled: !(rotation && typeof rotation === "object" && (rotation as { enabled?: unknown }).enabled === false),
   };
 }
 

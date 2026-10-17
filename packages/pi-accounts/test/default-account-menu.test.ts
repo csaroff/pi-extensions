@@ -152,7 +152,7 @@ for (const finish of ["save", "cancel", "dispose", "shutdown"] as const) {
 
 test("rotation toggle saves the user-wide setting and preserves accounts", async () => {
   const { store, owner } = await setup();
-  for (const expected of [true, false]) {
+  for (const expected of [false, true]) {
     const choices = [expected ? "Automatic rotation: off" : "Automatic rotation: on"];
     const { ctx, notifications } = createMockContext({
       mode: "rpc",

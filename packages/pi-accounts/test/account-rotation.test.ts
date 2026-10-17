@@ -99,12 +99,11 @@ function settleEvent(manager: SessionManager) {
 }
 
 test("a usage-limited account hands the same request to the next saved account", async () => {
-  // Two ChatGPT subscriptions under the native OpenAI provider. "work" is the saved default,
-  // and rotation is switched on in pi-accounts.json.
+  // Two ChatGPT subscriptions under the native OpenAI provider. "work" is the saved default.
+  // Rotation needs no setup: it is on unless turned off.
   const store = new AccountStore(new InMemoryAccountStorageBackend());
   await store.update((data) => ({
     ...data,
-    rotation: { enabled: true },
     providers: {
       openai: { active: "work", accounts: { work: credential("work"), personal: credential("personal") } },
     },
@@ -167,7 +166,7 @@ async function rotationFixture(options: { rotation?: boolean; active?: string; a
   const store = new AccountStore(new InMemoryAccountStorageBackend());
   await store.update((data) => ({
     ...data,
-    ...(options.rotation === false ? {} : { rotation: { enabled: true } }),
+    ...(options.rotation === false ? { rotation: { enabled: false } } : {}),
     providers: {
       openai: {
         ...(options.active === undefined ? { active: "work" } : options.active ? { active: options.active } : {}),
@@ -213,7 +212,7 @@ test("rotation stops once every saved account has failed the same prompt", async
 });
 
 for (const scenario of [
-  { name: "rotation is off by default", fixture: { rotation: false }, error: "usage_limit_exceeded" },
+  { name: "the user turned rotation off", fixture: { rotation: false }, error: "usage_limit_exceeded" },
   { name: "auth failures stay fail-closed", fixture: {}, error: "401 Unauthorized: token has been invalidated" },
   { name: "provider-wide overload would fail on any account", fixture: {}, error: "529 overloaded" },
   { name: "Pi's built-in login is not in the saved pool", fixture: { active: "" }, error: "usage_limit_exceeded" },
