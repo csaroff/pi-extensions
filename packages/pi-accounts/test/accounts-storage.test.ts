@@ -550,6 +550,59 @@ test("migration copies released Codex schema into provider state and retains rol
   }
 });
 
+test("migration imports MultiCodex accounts when only codex-accounts.json remains", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-accounts-migrate-multicodex-"));
+  const legacy = join(dir, "codex-accounts.json");
+  const canonical = join(dir, ACCOUNTS_FILE);
+  try {
+    // MultiCodex stores an array keyed by email rather than pi-accounts' named credential map.
+    await writeFile(
+      legacy,
+      JSON.stringify({
+        version: 1,
+        activeEmail: "home@example.net",
+        accounts: [
+          {
+            email: "work@example.com",
+            accessToken: "access-work",
+            refreshToken: "refresh-work",
+            expiresAt: 2_000_000_000_000,
+            accountId: "account-work",
+            lastUsed: 100,
+          },
+          {
+            email: "home@example.net",
+            accessToken: "access-home",
+            refreshToken: "refresh-home",
+            expiresAt: 2_000_000_000_001,
+            accountId: "account-home",
+            lastUsed: 200,
+          },
+        ],
+      }),
+      { mode: 0o600 },
+    );
+
+    // Loading pi-accounts should retain both credentials and the previously active account.
+    assert.equal((await migrateLegacyCodexAccountsFile(legacy, canonical)).status, "migrated");
+    const migrated = parseAccountsData(await readFile(canonical, "utf8"));
+    const codex = migrated.providers["openai-codex"];
+    assert.equal(codex?.active, "home-example.net");
+    assert.deepEqual(Object.keys(codex?.accounts ?? {}), ["work-example.com", "home-example.net"]);
+    assert.deepEqual(codex?.accounts["work-example.com"], {
+      type: "oauth",
+      access: "access-work",
+      refresh: "refresh-work",
+      expires: 2_000_000_000_000,
+      email: "work@example.com",
+      accountId: "account-work",
+      lastUsed: 100,
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("concurrent migrations serialize and install one complete canonical file", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-accounts-concurrent-migration-"));
   const legacy = join(dir, "pi-codex-accounts.json");
