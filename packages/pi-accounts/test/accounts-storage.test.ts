@@ -589,15 +589,18 @@ test("migration imports MultiCodex accounts when only codex-accounts.json remain
     const codex = migrated.providers["openai-codex"];
     assert.equal(codex?.active, "home-example.net");
     assert.deepEqual(Object.keys(codex?.accounts ?? {}), ["work-example.com", "home-example.net"]);
-    assert.deepEqual(codex?.accounts["work-example.com"], {
-      type: "oauth",
-      access: "access-work",
-      refresh: "refresh-work",
-      expires: 2_000_000_000_000,
-      email: "work@example.com",
-      accountId: "account-work",
-      lastUsed: 100,
-    });
+    assert.deepEqual(
+      { ...codex?.accounts["work-example.com"] },
+      {
+        type: "oauth",
+        access: "access-work",
+        refresh: "refresh-work",
+        expires: 2_000_000_000_000,
+        email: "work@example.com",
+        accountId: "account-work",
+        lastUsed: 100,
+      },
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

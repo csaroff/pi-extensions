@@ -366,14 +366,72 @@ function migrateReleasedCodexData(raw: string | undefined): AccountsData {
   } catch {
     throw new Error(`Invalid legacy Codex accounts JSON in ${LEGACY_CODEX_ACCOUNTS_FILE}.`);
   }
-  if (!isRecord(parsed) || !isRecord(parsed.accounts)) {
-    throw new Error("Invalid legacy Codex accounts data.");
-  }
-  const state = normalizeProviderState({ active: parsed.active, accounts: parsed.accounts });
+  if (!isRecord(parsed)) throw new Error("Invalid legacy Codex accounts data.");
+  const state = Array.isArray(parsed.accounts)
+    ? migrateMultiCodexProviderState(parsed)
+    : normalizeProviderState({ active: parsed.active, accounts: parsed.accounts });
   return {
     version: 1,
     providers: defineOwn(Object.create(null) as Record<string, ProviderAccountsData>, "openai-codex", state),
   };
+}
+
+function migrateMultiCodexProviderState(value: Record<string, unknown>): ProviderAccountsData {
+  const entries = value.accounts;
+  if (!Array.isArray(entries)) throw new Error("Invalid legacy Codex accounts data.");
+  const accounts = Object.create(null) as Record<string, StoredCredential>;
+  const namesByEmail = new Map<string, string>();
+
+  for (const [index, entry] of entries.entries()) {
+    if (!isRecord(entry) || typeof entry.email !== "string" || !entry.email.trim()) {
+      throw new Error("Invalid legacy Codex accounts data: account email is required.");
+    }
+    const email = entry.email.trim();
+    const name = uniqueMigratedAccountName(email, index, accounts);
+    const credential = normalizeStoredCredential(
+      {
+        type: "oauth",
+        access: entry.accessToken,
+        refresh: entry.refreshToken,
+        expires: entry.expiresAt,
+        email,
+        ...(entry.accountId !== undefined ? { accountId: entry.accountId } : {}),
+        ...(entry.lastUsed !== undefined ? { lastUsed: entry.lastUsed } : {}),
+        ...(entry.quotaExhaustedUntil !== undefined ? { quotaExhaustedUntil: entry.quotaExhaustedUntil } : {}),
+        ...(entry.needsReauth !== undefined ? { needsReauth: entry.needsReauth } : {}),
+      },
+      name,
+    );
+    Object.defineProperty(accounts, name, {
+      configurable: true,
+      enumerable: true,
+      value: credential,
+      writable: true,
+    });
+    if (!namesByEmail.has(email)) namesByEmail.set(email, name);
+  }
+
+  const selectedEmail =
+    typeof value.manualEmail === "string"
+      ? value.manualEmail
+      : typeof value.activeEmail === "string"
+        ? value.activeEmail
+        : undefined;
+  return normalizeProviderState({ active: selectedEmail ? namesByEmail.get(selectedEmail) : undefined, accounts });
+}
+
+function uniqueMigratedAccountName(email: string, index: number, accounts: Record<string, StoredCredential>): string {
+  const normalized = email
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^[.-]+|[.-]+$/g, "")
+    .slice(0, 64);
+  const base = normalized || `account-${index + 1}`;
+  if (!Object.hasOwn(accounts, base)) return base;
+  for (let suffix = 2; ; suffix += 1) {
+    const ending = `-${suffix}`;
+    const candidate = `${base.slice(0, 64 - ending.length)}${ending}`;
+    if (!Object.hasOwn(accounts, candidate)) return candidate;
+  }
 }
 
 let pendingMigrationNotice: string | undefined;
